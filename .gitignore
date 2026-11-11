@@ -1,0 +1,20 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+
+# Generated data and model weights. Frozen evaluation sets and source data stay tracked.
+finetune/artifacts/
+data_gen/cache/
+eval/results/
+*.safetensors
+*.pt
+*.bin
+*.gguf
+
+# Runtime handoff queue (WP7).
+data/handoff_queue.jsonl

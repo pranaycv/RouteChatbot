@@ -1,0 +1,110 @@
+# Shared settings. Stage code reads these through routechat.config.get_settings().
+# Prices checked 2026-11-11 against OpenAI, Mapbox, and GraphHopper public pricing.
+# A change to a key is a pull request reviewed with the schemas.
+
+graph:
+  request_budget_s: 30
+
+guard:
+  max_chars: 2000
+  short_text_chars: 20
+  english_min_prob: 0.5
+  other_language_min_prob: 0.9
+
+classifier:
+  base_model: Qwen/Qwen2.5-1.5B-Instruct
+  fallback_model: Qwen/Qwen2.5-0.5B-Instruct
+  prompted_small: gpt-4.1-mini
+  prompted_large: gpt-4.1
+  max_new_tokens: 80
+  temperature: 0
+
+extractor:
+  model: gpt-4.1-mini
+  temperature: 0
+
+writer:
+  model: gpt-4.1-mini
+  temperature: 0
+  max_words: 90
+
+trip:
+  max_required_stops: 3
+  max_modes_to_compare: 2
+
+maps:
+  http_timeout_s: 8
+  attempts: 2
+  wait_s: 1
+  geocode_country: ca
+  # Proximity used when resolving the origin itself (downtown Toronto).
+  downtown_toronto:
+    lon: -79.3832
+    lat: 43.6532
+  origin_match_radius_km: 50
+  detour_min_km: 3
+  detour_fraction: 0.30
+  # GraphHopper custom-model multipliers. The free plan may reject ch.disable;
+  # WP4 confirms that on the week-1 spike before relying on these weights.
+  custom_model:
+    avoid_highways:
+      motorway: 0
+      trunk: 0.3
+      trunk_on_revise: 0
+    avoid_tolls: 0
+    avoid_ferries: 0
+    prefer_bike_lanes:
+      missing: 0.6
+      missing_on_revise: 0.3
+    minimize_elevation:
+      slope_above_6: 0.5
+      slope_above_4_on_revise: 0.2
+    prefer_quiet_or_scenic:
+      primary_or_secondary: 0.6
+      primary_or_secondary_on_revise: 0.4
+
+verifier:
+  bike_network_min_share: 0.60
+  highway_max_m: 200
+  flat_max_climb_m_per_km: 10
+  distance_tolerance: 1.05
+  duration_tolerance: 1.10
+  loop_tolerance: 0.10
+  arrive_by_buffer_min: 5
+  sponsor_max_distance_m: 500
+  sponsor_min_rating: 4.0
+
+prices:
+  openai_usd_per_million_tokens:
+    gpt-4.1:
+      input: 2.00
+      cached_input: 0.50
+      output: 8.00
+    gpt-4.1-mini:
+      input: 0.40
+      cached_input: 0.10
+      output: 1.60
+    gpt-4.1-nano:
+      input: 0.10
+      cached_input: 0.025
+      output: 0.40
+  mapbox_usd_per_thousand:
+    directions:
+      free_monthly: 100000
+      then: 2.00
+    temporary_geocoding:
+      free_monthly: 100000
+      then: 0.75
+    search_box_requests:
+      free_monthly: 25000
+      then: 1.70
+    search_box_sessions:
+      free_monthly: 2500
+      then: 11.50
+  graphhopper:
+    credits_per_route_2_to_10_points: 1
+    credits_per_round_trip: 2
+    free_credits_per_day: 500
+    free_plan_commercial: false
+    basic_eur_per_month: 69
+    basic_credits_per_day: 5000
