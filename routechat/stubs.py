@@ -1,4 +1,11 @@
-"""Week-1 outputs for the running example. STUBS=1 installs these in place of the stages."""
+"""Week-1 stand-ins for the seven stages.
+
+STUBS=1 installs stub_nodes() in place of the real packages. Every builder
+below returns the handbook's running example, and each node returns only
+the state fields its stage owns. The destination coordinate is the one
+value the handbook truncates: University of Toronto, St George campus, so
+the geometry is a complete line rather than an ellipsis.
+"""
 
 from routechat.schemas import (
     Check,
@@ -21,8 +28,8 @@ RUNNING_UTTERANCE = (
     "and stop at a Canadian Tire."
 )
 
-# The handbook truncates the destination coordinate. This is the St George campus,
-# so the running-example geometry is a complete line.
+# The handbook writes the destination coordinate as an ellipsis. St George
+# campus completes the line. WP4 replaces this point with the resolved one.
 _UofT_LON = -79.3957
 _UofT_LAT = 43.6629
 

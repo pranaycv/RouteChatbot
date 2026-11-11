@@ -203,6 +203,7 @@ def test_timeout_in_a_revise_loop_stops_before_maps():
 
 
 def test_t_0_05_repository_has_no_key_material():
+    # Built by concatenation so this test file does not itself contain the markers it scans for.
     markers = ("s" + "k-", "p" + "k" + ".")
     skip_dirs = {".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
     offenders: list[str] = []

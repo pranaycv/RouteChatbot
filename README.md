@@ -99,3 +99,15 @@ ticket = state.get("handoff")
 ## Branches
 
 `allow` goes to the classifier. `clarify`, `refuse`, and `fixed_reply` go to the writer. `plan`, `replan`, `compare_modes`, and `lookup_only` go to the extractor. A complete constraint set goes to the map tools; a missing field or too many stops goes to the writer. The verifier may send the request back to the map tools once. A second `revise` does not loop. A clarify that is still unclear after one follow-up (`clarify_count >= 1`) is written as `escalate`.
+
+## Decisions other packages depend on
+
+These are fixed with schemas v1. A change is a pull request reviewed by the integration lead and by every package that reads the object.
+
+- **Null is not zero, and null is not an empty list.** On a route, `closures: null` means the provider did not say. `closures: []` means it checked and found none. The same rule applies to opening hours: null means unknown, not closed. Measured lengths follow the same idea: null means the fact is missing, 0 means it was measured and is zero.
+- **One writer per state field.** A stage returns only its own keys. It does not call the next stage. The graph is the only place that chooses the next node.
+- **One revise.** The verifier sets `revision_count` to 1 when it wants another pass through the map tools. If it asks again, the graph sets the count to 2 and sends the request to the writer.
+- **A second clarify is escalate.** The app keeps `clarify_count` between turns. When that count is already 1 or more, the graph relabels the action as `escalate` before the writer runs.
+- **Failures stop the run.** A raised exception or a spent 30-second budget writes a handoff (`system_error` or `timeout`) and the system-error sentence, then ends. The log stores the exception type. It does not store the exception message or the raw request, because this can happen before the input guard has masked the text.
+- **`deadline` uses `time.monotonic()`.** The graph fills it in when the caller does not. Do not pass a `time.time()` value.
+- **Stage modules are imported, not created here.** With `STUBS` unset, a missing stage module is an import error. `STUBS=1` is the way to run the flow before that module exists.
