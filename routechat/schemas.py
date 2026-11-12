@@ -19,9 +19,10 @@ RouteAction = Literal[
     "escalate",
     "refuse",
 ]
-# The pilot only plans walk, bike, and car. The other values stay so a request
-# for a hike, a run, transit, or several modes can be named and turned away,
-# rather than quietly treated as one of the three.
+# Accepted modes are walk, run, bike, and car. A run is routed like a walk.
+# A combination of those four is also accepted. hike and transit stay in the
+# list so they can be named and turned away. multimodal is accepted only when
+# every part is one of the four allowed modes.
 PrimaryMode = Literal[
     "walk",
     "bike",
