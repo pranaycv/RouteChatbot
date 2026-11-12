@@ -7,11 +7,11 @@
 Where each number comes from:
   - usage per request (model cost, API calls)  -> the run logs (logs/<run_id>.jsonl)
   - unit prices                                -> config.yaml `prices:` (WP0), read through routechat.config
-  - WP11 assumptions (volumes, discounts,      -> eval/cost_assumptions.yaml (this package)
-    bigger plans, fixed and error costs, revenue)
+  - business assumptions (volumes, exchange    -> eval/cost_assumptions.yaml (this package)
+    rate, fixed and error costs, revenue)
 
 config.yaml is not edited: its Settings model forbids unknown keys, so WP11's assumptions live in their
-own file. A value left null shows up as NaN in the output and in `missing_inputs`, so an unfinished
+own file, and that file holds no prices. A value left null shows up as NaN in the output and in `missing_inputs`, so an unfinished
 assumption can never quietly become zero.
 
     uv run python -m eval.cost_model --logs logs/<run_id>.jsonl --success eval/results/end_to_end.csv
@@ -71,14 +71,11 @@ def per_request_usage(stage_logs: pd.DataFrame) -> dict:
             "api_calls_per_request": {k: v / n for k, v in calls.items()}}
 
 
-def mapbox_tiers(price, discounts: list | None) -> list:
-    """Build graduated tiers: free up to config's free_monthly, config's `then` price,
-    then WP11's volume discounts. A None cap means 'and above'."""
-    tiers = [[price.free_monthly, 0.0]]
-    for up_to, per_1000 in (discounts or [[None, price.then]]):
-        tiers.append([up_to, per_1000])
-    tiers.append([None, tiers[-1][1]])   # beyond the last listed tier, keep the last price
-    return tiers
+def mapbox_tiers(price) -> list:
+    """Free up to config's free_monthly, then config's `then` price for every call above it.
+    Mapbox gives volume discounts above 500,000 calls; they are not in config.yaml, so the
+    1,000,000-a-month row is an upper bound [say so in the memo, or add the tiers to config]."""
+    return [[price.free_monthly, 0.0], [None, price.then]]
 
 
 def tiered_cost(calls: float, tiers: list) -> float:
@@ -105,20 +102,19 @@ def mapbox_cost(calls_per_request: dict, volume: int, prices, a: dict) -> float:
     total = 0.0
     for line, calls in by_price.items():
         price = prices.mapbox_usd_per_thousand[line]
-        total += tiered_cost(calls, mapbox_tiers(price, a["mapbox_volume_discounts"].get(line)))
+        total += tiered_cost(calls, mapbox_tiers(price))
     return total
 
 
 def graphhopper_plan(routes_per_request: float, volume: int, prices, a: dict) -> tuple[str, float]:
-    """Cheapest paid plan whose daily credit limit covers the volume. Returns (plan, USD per month).
-    The free plan is never chosen: config says it is not for commercial use."""
+    """GraphHopper plan for a volume, using the plans in config.yaml. Returns (plan, USD per month).
+    The free plan is never chosen: config says it is not for commercial use. config.yaml lists only
+    Basic, so a volume above Basic's daily credits returns NaN with a note instead of a guessed price."""
     gh = prices.graphhopper
     per_day = routes_per_request * volume * gh.credits_per_route_2_to_10_points / a.get("days_per_month", 30)
-    plans = [["Basic", gh.basic_eur_per_month, gh.basic_credits_per_day]] + a["graphhopper_more_plans"]
-    for name, eur, credits_per_day in plans:
-        if per_day <= credits_per_day:
-            return name, eur * _num(a.get("eur_to_usd"))
-    return "Custom (contact sales)", NAN
+    if per_day <= gh.basic_credits_per_day:
+        return "Basic", gh.basic_eur_per_month * _num(a.get("eur_to_usd"))
+    return "Above Basic (price not in config.yaml)", NAN
 
 
 def fixed_monthly(a: dict) -> float:

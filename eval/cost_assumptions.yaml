@@ -1,20 +1,9 @@
-# Owner: Person E (WP11). Assumptions the cost model needs that are not in config.yaml.
-# Unit prices live in config.yaml under `prices:` (WP0) and are read from there, not copied here.
-# This file only adds what WP11 decides: volumes, the discount tiers above the first paid tier,
-# the larger GraphHopper plans, the exchange rate, fixed costs, error costs and revenue.
+# Owner: Person E (WP11). Business assumptions for the cost model, and nothing else.
+# All prices (models, Mapbox, GraphHopper) live in config.yaml under `prices:` (WP0) and are read from there.
 # null = not decided yet. The cost model prints every null, so nothing is silently counted as zero.
-# Extra prices read on the providers' pages on 2026-11-11; re-check before the final run.
 
 volumes: [1000, 100000, 1000000]     # requests per month (WP11 Part C step 3)
 days_per_month: 30
-
-# Mapbox discount tiers above the first paid tier in config.yaml, USD per 1,000.
-# [calls_per_month_up_to, usd_per_1000]; the last row applies to everything above it.
-# Source: https://www.mapbox.com/pricing
-mapbox_volume_discounts:
-  directions:          [[500000, 2.00], [1000000, 1.60], [5000000, 1.20]]   # 5M+ is "contact sales"
-  temporary_geocoding: [[500000, 0.75], [1000000, 0.60], [5000000, 0.45]]
-  search_box_requests: [[100000, 1.70], [500000, 1.50], [1000000, 1.25]]    # 1M+ is "contact sales"
 
 # Which config.yaml Mapbox price each logged api_calls name uses.
 api_to_price:
@@ -23,12 +12,7 @@ api_to_price:
   searchbox: search_box_requests             # [check that /forward is billed per request, not per session]
   searchbox_category: search_box_requests
 
-# GraphHopper plans above Basic (Basic is in config.yaml). Source: https://www.graphhopper.com/pricing/
-# [name, eur_per_month, credits_per_day]
-graphhopper_more_plans:
-  - [Standard, 199, 15000]
-  - [Premium, 479, 50000]                    # above 50,000 credits a day: "Custom", contact sales
-eur_to_usd: null                             # fill with the rate on the day of the final run
+eur_to_usd: null                             # GraphHopper is priced in EUR; fill with the rate on the day of the final run
 
 fixed_monthly_usd:
   app_hosting: null

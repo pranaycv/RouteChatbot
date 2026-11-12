@@ -53,8 +53,12 @@ def save(df: pd.DataFrame, name: str, run_id: str):
     print(f"wrote {RESULTS / name} ({len(df)} rows)")
 
 
-def run_graph(records: list[dict], dataset: str, run_id: str) -> Path:
+def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, list[dict]]:
     """Send each record through the real graph; WP7's logger writes logs/<run_id>.jsonl.
+
+    Returns the log path and, per item, the predicted ConstraintSet. The ConstraintSet is kept out of
+    the app log on purpose (the origin can be a street address); it is saved only in the evaluation
+    results for that item, and the gold copy stays in the D2 file.
 
     Uses routechat.graph.invoke, the same entry point the app uses (README, "Plugging in a stage").
     RUN_ID, EVAL_DATASET and EVAL_ITEM_ID are passed as environment variables so WP7's logger can stamp
@@ -62,12 +66,17 @@ def run_graph(records: list[dict], dataset: str, run_id: str) -> Path:
     """
     from routechat.graph import invoke  # WP0
     os.environ["RUN_ID"] = run_id; os.environ["EVAL_DATASET"] = dataset
+    predicted = []
     for r in records:
         os.environ["EVAL_ITEM_ID"] = r["item_id"]
-        invoke({"request_id": f"{dataset}_{r['item_id']}", "utterance": r["utterance"],
-                "turn_index": r.get("turn_index", 0), "known": r.get("known"),
-                "clarify_count": 0, "revision_count": 0})
-    return Path("logs") / f"{run_id}.jsonl"
+        state = invoke({"request_id": f"{dataset}_{r['item_id']}", "utterance": r["utterance"],
+                        "turn_index": r.get("turn_index", 0), "known": r.get("known"),
+                        "clarify_count": 0, "revision_count": 0})
+        con = state.get("constraints")
+        if hasattr(con, "model_dump"):
+            con = con.model_dump()
+        predicted.append({"item_id": r["item_id"], "constraints": con})
+    return Path("logs") / f"{run_id}.jsonl", predicted
 
 
 def load_logs(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -116,9 +125,10 @@ def step_end_to_end(run_id: str, logs_path: Path | None):
     gold = pd.DataFrame(read_jsonl(DATASETS / "d2_end_to_end.jsonl"))
     if gold.empty:
         print("end_to_end: waiting for D2 (WP8)"); return
+    predicted = None
     if logs_path is None:
         try:
-            logs_path = run_graph(gold.to_dict("records"), "D2", run_id)
+            logs_path, predicted = run_graph(gold.to_dict("records"), "D2", run_id)
         except ImportError:
             print("end_to_end: waiting for routechat.graph (WP0)"); return
     req, stg = load_logs(logs_path)
@@ -133,9 +143,20 @@ def step_end_to_end(run_id: str, logs_path: Path | None):
                **metrics.cost_per_success(req, ts["success"])}
     save(pd.DataFrame([summary]), "end_to_end_summary.csv", run_id)
     save(metrics.latency_table(stg, req), "latency.csv", run_id)
-    # Extractor field accuracy (metrics.extraction_field_accuracy with EXTRACTOR_FIELDS) needs the
-    # ConstraintSet per request. Where it is stored is still to agree with WP3 and WP7.
-    print("extractor: waiting for the logged ConstraintSet (WP3/WP7)")
+    step_extractor(run_id, gold, predicted)
+
+
+def step_extractor(run_id: str, gold: pd.DataFrame, predicted: list[dict] | None):
+    """Extractor field accuracy on D2. Predicted ConstraintSets come from this run (never from the app
+    log); gold ones from the D2 file. Both are written to eval/results, which git ignores."""
+    if not predicted or "gold_constraints" not in gold:
+        print("extractor: needs a fresh D2 run and gold_constraints in D2 (WP8)"); return
+    save(pd.DataFrame(predicted), "predicted_constraints.csv", run_id)
+    flat = lambda rows, key: pd.DataFrame([{"item_id": r["item_id"], **(r[key] or {})} for r in rows])
+    pred = flat(predicted, "constraints")
+    gold_c = flat(gold.to_dict("records"), "gold_constraints")
+    fields = [f for f in EXTRACTOR_FIELDS if f in gold_c and f in pred]
+    save(metrics.extraction_field_accuracy(pred, gold_c, fields), "extractor.csv", run_id)
 
 
 def step_adversarial(run_id: str, logs_path: Path | None):
@@ -145,7 +166,7 @@ def step_adversarial(run_id: str, logs_path: Path | None):
         print("adversarial: waiting for D3 (WP8)"); return
     if logs_path is None:
         try:
-            logs_path = run_graph(gold.to_dict("records"), "D3", run_id)
+            logs_path, _ = run_graph(gold.to_dict("records"), "D3", run_id)
         except ImportError:
             print("adversarial: waiting for routechat.graph (WP0)"); return
     req, _ = load_logs(logs_path)

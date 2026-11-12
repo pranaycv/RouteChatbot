@@ -11,11 +11,11 @@ This branch only adds new files. It does not change any file owned by another pa
 | `eval/metrics.py` | Every WP10 metric as a function: trip success, classifier metrics, policy-critical errors, extractor field accuracy, adversarial pass rate, handoff precision/recall, latency, cost per successful request, judge agreement. |
 | `eval/run_eval.py` | The single command named in the root README. Steps that need other packages print "waiting for ..." until that code is merged. |
 | `eval/cost_model.py` | WP11 Part C cost model. Unit prices come from `config.yaml` `prices:` through `routechat.config`; nothing is copied. |
-| `eval/cost_assumptions.yaml` | WP11's own assumptions: volumes, Mapbox volume discounts, GraphHopper plans above Basic, EUR to USD, fixed and error costs, revenue. |
+| `eval/cost_assumptions.yaml` | Business assumptions only: volumes, EUR to USD, fixed and error costs, revenue. No prices. |
 | `prompts/judge_v1.md` | LLM judge prompt with the four WP10 yes/no questions. |
 | `policy/operating_policy.md` | Operating policy v1, P-01 to P-09. |
 | `report/status_quo_study.csv`, `report/status_quo_study_instructions.md` | Template and instructions for the manual baseline (WP11 Part B). |
-| `tests/test_eval.py` | T-10-01 to T-10-07 and T-11-01 to T-11-03, offline. |
+| `tests/test_eval.py` | T-10-01 to T-10-09 and T-11-01 to T-11-03, offline. |
 
 ```bash
 FIXTURES=replay uv run pytest                     # all tests, WP0's and these
@@ -26,21 +26,26 @@ uv run python -m eval.cost_model --logs logs/<run_id>.jsonl --success eval/resul
 ## Decisions, and why
 
 - **No change to `config.yaml`.** `Settings` in `routechat/config.py` forbids unknown keys, so a new
-  section there would break every stage. WP11's assumptions live in `eval/cost_assumptions.yaml` and
-  the unit prices are read from `prices:`.
-- **Graduated Mapbox pricing.** `config.yaml` has the free tier and the first paid price; the cost
-  model adds Mapbox's published volume discounts so the 1,000,000-a-month row is not overstated.
-- **GraphHopper is a monthly plan.** The model picks the cheapest paid plan whose daily credits cover
-  the volume. The free plan is never chosen because `free_plan_commercial: false`.
+  section there would break every stage. Prices are read from `prices:`; `eval/cost_assumptions.yaml`
+  holds business assumptions only.
+- **Mapbox and GraphHopper use only the prices in config.** Mapbox's volume discounts above 500,000 calls
+  and GraphHopper plans above Basic are not in `config.yaml`, so the 1,000,000-a-month row is an upper
+  bound for Mapbox and NaN for GraphHopper. If we want that row priced, the tiers go into `prices:` (WP0).
+- **The ConstraintSet stays out of the app log.** The origin can be a street address. `run_eval` saves the
+  predicted ConstraintSet in the evaluation results for each item (`eval/results`, git-ignored); the gold
+  copy stays in the D2 file.
+- **Second clarify = handoff.** The graph rewrites it to `escalate` and creates no ticket, so the outcome
+  reads `route_action`, not the ticket.
+- **`revision_count` can be 0, 1 or 2.** A second revise is counted but does not loop.
 - **Null stays NaN.** An assumption nobody has set shows up as NaN and in `missing_inputs`, never as 0.
 - **`error_type`, not `error`.** The optional error field uses the name `graph._log_failure` already writes.
 
 ## Still to agree
 
-- WP7: request-line fields (see the Evaluation Spec, Table 3), where the ConstraintSet for each request
-  is logged, and whether stage lines carry `ts` (the graph's failure line does not yet).
-- WP7: the names RUN_ID, EVAL_DATASET and EVAL_ITEM_ID used to stamp evaluation runs.
-- WP8: file names for D1 test, D2, D3 and the 50-reply judge sample under `eval/datasets/`.
+- WP7: whether stage lines carry `ts` (the graph's failure line does not yet), and the names RUN_ID,
+  EVAL_DATASET and EVAL_ITEM_ID used to stamp evaluation runs.
+- WP8: file names for D1 test, D2 (with `gold_constraints`), D3 and the 50-reply judge sample under `eval/datasets/`.
+- WP4 and WP6: a test id for P-09 (hiking and transit stopped by the map tools and the writer template).
 - Team: EUR to USD rate, value of time, sponsored card price and the cost per error type.
 
 ## Prompt template for AI coding tools

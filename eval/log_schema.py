@@ -53,7 +53,7 @@ REQUEST_REQUIRED = {
     "outcome": str,            # one of OUTCOMES (see outcome_from_state)
     "route_action": str,       # from RouteClassification, "" if the guard stopped the request
     "primary_mode": str,
-    "revision_count": int,     # 0 or 1
+    "revision_count": int,     # 0, 1 or 2: the graph counts a second revise as 2 (it does not loop again)
     "checks": list,            # [{"id": "highways", "status": "met", "hard": true}, ...] from VerificationReport
     "must_mention": list,      # from VerificationReport
     "mentioned_ids": list,     # from ReplyDraft
@@ -81,6 +81,8 @@ def outcome_from_state(state: dict) -> str:
     a = cls.get("route_action")
     if a == "refuse":
         return "refuse"
+    # A second clarify counts as handoff. The graph rewrites it to route_action = "escalate" before the
+    # writer runs and does not create a HandoffTicket, so we read route_action, not the ticket.
     if a == "escalate":
         return "handoff"
     if a == "clarify":

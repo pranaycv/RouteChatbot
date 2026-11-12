@@ -77,22 +77,24 @@ def test_T_10_06_handoff_precision_recall():
     assert m["precision"] == 0.5 and m["recall"] == 0.5
 
 
-def test_T_11_01_tiered_prices_use_config_and_discounts():
+def test_T_11_01_mapbox_prices_come_from_config():
     prices, a = cost_model.load_prices(), cost_model.load_assumptions()
     d = prices.mapbox_usd_per_thousand["directions"]
-    tiers = cost_model.mapbox_tiers(d, a["mapbox_volume_discounts"]["directions"])
+    tiers = cost_model.mapbox_tiers(d)
     assert cost_model.tiered_cost(d.free_monthly, tiers) == 0
-    # 1M calls: 100k free, 400k at $2.00, 500k at $1.60 = 800 + 800
-    assert math.isclose(cost_model.tiered_cost(1_000_000, tiers), 1600.0)
+    # 1M calls: first 100k free, then 900k at config's $2.00 per 1,000
+    assert math.isclose(cost_model.tiered_cost(1_000_000, tiers), 900 * d.then)
     assert "eur_to_usd" in cost_model.missing_inputs(a)
+    # the assumptions file holds business inputs only, no prices
+    assert not {"mapbox_volume_discounts", "graphhopper_more_plans", "prices"} & set(a)
 
 
 def test_T_11_02_graphhopper_plan_by_volume():
     prices, a = cost_model.load_prices(), cost_model.load_assumptions()
     a["eur_to_usd"] = 1.0
-    assert cost_model.graphhopper_plan(1, 1000, prices, a) == ("Basic", 69.0)        # 33 credits/day
-    assert cost_model.graphhopper_plan(1, 1_000_000, prices, a) == ("Premium", 479.0)  # 33,333 credits/day
-    assert cost_model.graphhopper_plan(2, 1_000_000, prices, a)[0].startswith("Custom")
+    assert cost_model.graphhopper_plan(1, 100_000, prices, a) == ("Basic", 69.0)   # 3,333 credits/day
+    plan, cost = cost_model.graphhopper_plan(1, 1_000_000, prices, a)            # 33,333 credits/day
+    assert plan.startswith("Above Basic") and math.isnan(cost)
 
 
 def test_T_11_03_monthly_table_shape_and_breakeven():
@@ -104,6 +106,18 @@ def test_T_11_03_monthly_table_shape_and_breakeven():
     assert t["total_cost"].isna().all()   # unpriced assumptions stay NaN, never zero
     a["fixed_monthly_usd"].update(classifier_hosting=30, training_one_off=12, amortise_months=12)
     assert math.isclose(cost_model.finetune_breakeven(0.0004, 0.0001, a), 31 / 0.0003)
+
+
+def test_T_10_08_second_clarify_is_handoff_via_escalate():
+    # The graph rewrites a second clarify to escalate and creates no HandoffTicket.
+    state = {"guard": {"decision": "allow"}, "clarify_count": 1,
+             "classification": {"route_action": "escalate"}, "handoff": None}
+    assert outcome_from_state(state) == "handoff"
+
+
+def test_T_10_09_revision_count_two_is_valid():
+    line = request_line("a", "handoff"); line["revision_count"] = 2
+    assert validate_line(line) == []
 
 
 def test_T_10_07_log_schema_accepts_graph_failure_line():
