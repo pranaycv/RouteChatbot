@@ -151,9 +151,23 @@ def monthly_table(usage: dict, success_rate: float, error_rates: dict, prices, a
     return pd.DataFrame(rows)
 
 
-def status_quo_saving(minutes_manual: float, minutes_agent: float, a: dict) -> float:
-    """Value of time saved per trip, compared against cost per request in the decision memo."""
-    return (minutes_manual - minutes_agent) / 60 * _num(a["status_quo"]["value_of_time_usd_per_hour"])
+def status_quo_saving(minutes_manual: float, minutes_agent: float, a: dict) -> dict:
+    """Time saved per trip against planning by hand (map apps, blogs, checking each requirement).
+
+    Agreed at the Nov 12 meeting: the main number is minutes saved, because nobody is paid to plan a
+    trip. A dollar value is added only if the team sets value_of_time_usd_per_hour; otherwise it is NaN."""
+    minutes = minutes_manual - minutes_agent
+    return {"minutes_saved": minutes,
+            "usd_saved": minutes / 60 * _num(a["status_quo"].get("value_of_time_usd_per_hour"))}
+
+
+def status_quo_from_study(study: pd.DataFrame) -> dict:
+    """Summary of report/status_quo_study.csv: median minutes by hand and how often every requirement was met."""
+    done = study[pd.to_numeric(study["minutes_spent"], errors="coerce") > 0]
+    met = done["all_requirements_met"].astype(str).str.lower().eq("yes")
+    return {"trips": len(done),
+            "median_minutes_manual": float(pd.to_numeric(done["minutes_spent"]).median()) if len(done) else NAN,
+            "all_requirements_met_rate": float(met.mean()) if len(done) else NAN}
 
 
 def finetune_breakeven(api_cost_per_class: float, ft_cost_per_class: float, a: dict,

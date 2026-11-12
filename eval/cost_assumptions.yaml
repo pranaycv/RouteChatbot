@@ -27,8 +27,8 @@ error_cost_usd:                              # cost per error, multiplied by the
   unsupported_claim: null
   sponsor_rule_broken: null
 
-status_quo:
-  value_of_time_usd_per_hour: null           # Part C step 6
+status_quo:                                  # Part C step 6. Main number is minutes saved (Nov 12 meeting);
+  value_of_time_usd_per_hour: null           # optional: only set if the team wants a dollar figure too
 
 revenue:
   cards_per_accepted_route: null             # at most 1 (P-05)

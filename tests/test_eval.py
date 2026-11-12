@@ -125,3 +125,15 @@ def test_T_10_07_log_schema_accepts_graph_failure_line():
     line = {"request_id": "r1", "stage": "maps", "latency_ms": 3.0, "tokens_in": 0, "tokens_out": 0,
             "cost_usd": 0.0, "api_calls": {}, "decision": "system_error", "error_type": None}
     assert validate_line(line) == ["missing ts"]
+
+
+def test_T_11_04_status_quo_is_minutes_saved_dollars_optional():
+    # Nov 12 meeting: time saved is the main number; dollars only if value_of_time is set.
+    a = cost_model.load_assumptions()
+    s = cost_model.status_quo_saving(25, 3, a)
+    assert s["minutes_saved"] == 22 and math.isnan(s["usd_saved"])
+    a["status_quo"]["value_of_time_usd_per_hour"] = 30
+    assert math.isclose(cost_model.status_quo_saving(25, 3, a)["usd_saved"], 11.0)
+    study = pd.DataFrame({"minutes_spent": [20, 30, 0], "all_requirements_met": ["yes", "no", "yes"]})
+    summary = cost_model.status_quo_from_study(study)   # the template row (0 minutes) is skipped
+    assert summary == {"trips": 2, "median_minutes_manual": 25.0, "all_requirements_met_rate": 0.5}
