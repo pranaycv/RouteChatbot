@@ -2,7 +2,7 @@
 
 Conversational route planner for MMAI 894. A request passes through seven stages. LangGraph runs them in order and chooses every branch in Python. Only the classifier, the constraint extractor, and the reply writer call a model.
 
-This repository currently contains WP0: the shared contracts, the configuration, and the orchestrator. Stage packages plug in beside it. They are not part of this package.
+This repository currently contains WP0 (the shared contracts, the configuration, and the orchestrator) and WP10/WP11 (evaluation, the cost model, and the operating policy). The stage packages plug in beside them as they are merged.
 
 ## Install
 
@@ -42,13 +42,15 @@ WP10 owns the evaluation entry point:
 FIXTURES=replay uv run python -m eval.run_eval --all
 ```
 
-Until that package is merged, the orchestrator checks are:
+Each step prints `waiting for ...` until the dataset or stage package it needs is merged. `eval/README.md` lists the WP10 and WP11 files and the cost-model command.
+
+The tests for every merged package run with:
 
 ```bash
 FIXTURES=replay uv run pytest
 ```
 
-`FIXTURES=replay` reads recorded API responses, so those tests do not call Mapbox or GraphHopper and do not spend credits.
+`FIXTURES=replay` reads recorded API responses, so these commands do not call Mapbox or GraphHopper and do not spend credits.
 
 ## Layout
 
@@ -59,6 +61,11 @@ routechat/schemas.py     shared contracts, schemas v1
 routechat/graph.py       stage order and every branch
 routechat/stubs.py       running-example output for STUBS=1
 tests/test_graph.py      T-0-01 to T-0-05
+eval/                    WP10 metrics and run_eval; WP11 cost model
+policy/                  operating policy v1
+prompts/                 judge prompt
+report/                  status quo study template
+tests/test_eval.py       T-10-01 to T-10-09, T-11-01 to T-11-03
 ```
 
 Schemas v1 are frozen. A contract change is a pull request reviewed by the integration lead and by every package that reads the object. Stage code depends on these objects, not on another stage's internals.
@@ -109,6 +116,7 @@ These are fixed with schemas v1. A change is a pull request reviewed by the inte
 - **One revise.** The verifier sets `revision_count` to 1 when it wants another pass through the map tools. If it asks again, the graph sets the count to 2 and sends the request to the writer.
 - **A second clarify is escalate.** The app keeps `clarify_count` between turns. When that count is already 1 or more, the graph relabels the action as `escalate` before the writer runs.
 - **Failures stop the run.** A raised exception or a spent 30-second budget writes a handoff (`system_error` or `timeout`) and the system-error sentence, then ends. The log stores the exception type. It does not store the exception message or the raw request, because this can happen before the input guard has masked the text.
+- **Place search is not tied to one country or city.** `maps.geocode_country` is null, so places resolve in any country. Set an ISO 3166 alpha-2 code, such as `ca`, only to restrict the search. No city's coordinates are built into the configuration.
 - **`deadline` uses `time.monotonic()`.** The graph fills it in when the caller does not. Do not pass a `time.time()` value.
 - **Stage modules are imported, not created here.** With `STUBS` unset, a missing stage module is an import error. `STUBS=1` is the way to run the flow before that module exists.
 - **The pilot plans walking, running, cycling, and driving.** `walk`, `run`, `bike`, and `car` are accepted. A run is routed like a walk. A trip may also combine those four, for example cycling and then walking. A hike or a transit request is named by the classifier and turned away with a short reply. It is not relabelled as a walk or a drive. If the user names no mode, ask them to choose walking, running, cycling, or driving. `hike`, `transit`, and `multimodal` stay in the schema so an unsupported request can be recognized on purpose. `multimodal` is accepted only when every part is one of the four allowed modes.
