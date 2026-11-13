@@ -1,0 +1,2 @@
+trip_id,planner,use_case,request_text,tools_used,minutes_spent,stops_included,deadline_met,mode_constraints_met,hours_checked,closures_checked,all_requirements_met,what_was_missed,notes
+D2-xxx,name,from D2,copy the D2 request,"e.g. Google Maps, blog, forum",0,yes/no/na,yes/no/na,yes/no/na,yes/no,yes/no,yes/no,,
