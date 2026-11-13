@@ -70,11 +70,6 @@ class TripSettings(_Strict):
     max_modes_to_compare: int
 
 
-class LonLat(_Strict):
-    lon: float
-    lat: float
-
-
 class HighwayWeights(_Strict):
     motorway: float
     trunk: float
@@ -106,14 +101,12 @@ class CustomModelWeights(_Strict):
 
 
 class MapSettings(_Strict):
-    """WP4 timeouts, the downtown-Toronto proximity point, and custom-model weights."""
+    """WP4 timeouts, the optional country filter, detour limits, and custom-model weights."""
 
     http_timeout_s: float
     attempts: int
     wait_s: float
-    geocode_country: str
-    downtown_toronto: LonLat
-    origin_match_radius_km: float
+    geocode_country: str | None = None
     detour_min_km: float
     detour_fraction: float
     custom_model: CustomModelWeights

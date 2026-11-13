@@ -36,12 +36,8 @@ maps:
   http_timeout_s: 8
   attempts: 2
   wait_s: 1
-  geocode_country: ca
-  # Proximity used when resolving the origin itself (downtown Toronto).
-  downtown_toronto:
-    lon: -79.3832
-    lat: 43.6532
-  origin_match_radius_km: 50
+  # Optional ISO 3166 alpha-2 filter for place search, such as ca. null searches every country.
+  geocode_country: null
   detour_min_km: 3
   detour_fraction: 0.30
   # GraphHopper custom-model multipliers. The free plan may reject ch.disable;
