@@ -2,7 +2,7 @@
 
 Conversational route planner for MMAI 894. A request passes through seven stages. LangGraph runs them in order and chooses every branch in Python. Only the classifier, the constraint extractor, and the reply writer call a model.
 
-This repository currently contains WP0 (the shared contracts, the configuration, and the orchestrator) and WP10/WP11 (evaluation, the cost model, and the operating policy). The stage packages plug in beside them as they are merged.
+This repository currently contains WP0 (the shared contracts, the configuration, and the orchestrator), WP1 (the input guard), WP6 (the response writer), and WP10/WP11 (evaluation, the cost model, and the operating policy). The other stage packages plug in beside them as they are merged.
 
 ## Install
 
@@ -60,10 +60,16 @@ routechat/config.py      typed access to config.yaml
 routechat/schemas.py     shared contracts, schemas v1
 routechat/graph.py       stage order and every branch
 routechat/stubs.py       running-example output for STUBS=1
+routechat/guards/        WP1 input guard
+routechat/agents/writer.py WP6 reply, template or one model call
+prompts/writer_v1.md     WP6 prompt
+prompts/CHANGELOG.md     prompt changes
+prompts/judge_v1.md      WP10 judge prompt
 tests/test_graph.py      T-0-01 to T-0-05
+tests/test_input_guard.py T-1-01 to T-1-10
+tests/test_writer.py     T-6-01 to T-6-04
 eval/                    WP10 metrics and run_eval; WP11 cost model
 policy/                  operating policy v1
-prompts/                 judge prompt
 report/                  status quo study template
 tests/test_eval.py       T-10-01 to T-10-09, T-11-01 to T-11-03
 ```

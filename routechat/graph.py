@@ -27,6 +27,7 @@ from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
+from routechat.agents.templates import SYSTEM_ERROR_TEXT
 from routechat.config import get_settings
 from routechat.schemas import (
     ConstraintSet,
@@ -43,8 +44,8 @@ from routechat.schemas import (
 
 logger = logging.getLogger("routechat.graph")
 
-# WP6 template for tool_timeout / system_error. Used here when the writer never runs.
-SYSTEM_ERROR_TEXT = "I couldn’t reach the map service just now. Please try again in a minute."
+# SYSTEM_ERROR_TEXT is the WP6 sentence. The graph uses it only when a stage
+# crashes or the budget runs out, which is before the writer can speak.
 
 NODE_ORDER = (
     "guard_in",
