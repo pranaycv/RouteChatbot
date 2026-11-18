@@ -64,7 +64,78 @@ def test_bike_lane_check_uses_configured_threshold(monkeypatch):
         provider="test",
         bike_network_share=0.72,
     )
+@pytest.mark.parametrize(
+    ("highway_m", "expected_status"),
+    [
+        (0.0, "met"),
+        (150.0, "met"),
+        (200.0, "met"),
+        (200.1, "unmet"),
+        (500.0, "unmet"),
+        (None, "unverifiable"),
+        (-1.0, "unverifiable"),
+        (float("nan"), "unverifiable"),
+        (float("inf"), "unverifiable"),
+    ],
+)
+def test_highway_check(highway_m, expected_status):
+    from routechat.verify.checks import check_highways
 
+    route = RouteCandidate(
+        id="test_route",
+        mode="car",
+        provider="test",
+        highway_m=highway_m,
+    )
+
+    result = check_highways(route, maximum_m=200)
+
+    assert result.id == "avoid:highways"
+    assert result.status == expected_status
+    assert result.hard is True
+    assert result.evidence
+
+
+@pytest.mark.parametrize(
+    "maximum_m",
+    [-1.0, float("nan"), float("inf")],
+)
+def test_invalid_highway_threshold(maximum_m):
+    from routechat.verify.checks import check_highways
+
+    route = RouteCandidate(
+        id="test_route",
+        mode="car",
+        provider="test",
+        highway_m=0,
+    )
+
+    with pytest.raises(ValueError):
+        check_highways(route, maximum_m=maximum_m)
+
+
+def test_highway_check_uses_configured_threshold(monkeypatch):
+    from routechat.verify.checks import check_highways
+
+    settings = SimpleNamespace(
+        verifier=SimpleNamespace(highway_max_m=100)
+    )
+    monkeypatch.setattr(
+        "routechat.verify.checks.get_settings",
+        lambda: settings,
+    )
+
+    route = RouteCandidate(
+        id="test_route",
+        mode="car",
+        provider="test",
+        highway_m=150,
+    )
+
+    result = check_highways(route)
+
+    assert result.status == "unmet"
+    assert "maximum 100 m" in result.evidence
     result = check_bike_lanes(route)
 
     assert result.status == "unmet"
