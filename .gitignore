@@ -16,5 +16,6 @@ eval/results/
 *.bin
 *.gguf
 
-# Runtime handoff queue (WP7).
+# Runtime handoff queue and event log (WP7).
 data/handoff_queue.jsonl
+logs/
