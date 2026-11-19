@@ -3,6 +3,9 @@
 
 Purpose: measure how long it takes a person to plan a D2 trip by hand today, and how often the plan
 misses a requirement. The decision memo compares this with the agent's time and trip success rate.
+The point is not to beat Google Maps on the route itself. It is the time spent finding the stops,
+putting them in order and checking every requirement (bike lanes, hills, hours, closures), which the
+agent does for you and then verifies (agreed at the Nov 12 meeting). The main number is minutes saved.
 
 Who: two teammates, 10 trips each, 20 trips in total. The two people take different trips.
 Which trips: picked by WP11 from D2, spread over the core use cases (sightseeing, attraction, cycling,

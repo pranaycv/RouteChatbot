@@ -47,7 +47,9 @@ def trip_success(logs: pd.DataFrame, gold: pd.DataFrame, judge: pd.DataFrame | N
 
     if judge is not None and len(judge):
         unsup = judge[judge["question"] == "unsupported_claim"].set_index("item_id")["answer"]
-        df["judge_ok"] = ~df["item_id"].map(unsup).fillna(False).astype(bool)
+        # Clean only when the judge explicitly said "no unsupported claim". A reply the judge could
+        # not grade, or skipped, does not count as clean, so a judge failure can't inflate success.
+        df["judge_ok"] = df["item_id"].map(unsup).eq(False)
     else:
         df["judge_ok"] = True
     df["success"] = df["outcome_ok"] & df["hard_ok"].astype(bool) & df["judge_ok"]
