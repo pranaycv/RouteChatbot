@@ -72,11 +72,40 @@ def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, lis
         state = invoke({"request_id": f"{dataset}_{r['item_id']}", "utterance": r["utterance"],
                         "turn_index": r.get("turn_index", 0), "known": r.get("known"),
                         "clarify_count": 0, "revision_count": 0})
-        con = state.get("constraints")
-        if hasattr(con, "model_dump"):
-            con = con.model_dump()
-        predicted.append({"item_id": r["item_id"], "constraints": con})
+        con = _plain(state.get("constraints"))
+        predicted.append({"item_id": r["item_id"], "constraints": con,
+                          "judge_input": judge_input(r, state)})
     return Path("logs") / f"{run_id}.jsonl", predicted
+
+
+def _plain(x):
+    """Pydantic model or dict -> plain dict (None stays None)."""
+    return x.model_dump() if hasattr(x, "model_dump") else x
+
+
+ROUTE_FACT_FIELDS = ("mode", "distance_m", "duration_s", "duration_traffic_s", "ascend_m", "stops_in_order",
+                     "highway_m", "toll_m", "ferry_m", "bike_network_share", "closures")
+
+
+def judge_input(record: dict, state: dict) -> dict:
+    """What the LLM judge sees for one reply (prompts/judge_v1.md): the request, the verifier's checks,
+    what had to be mentioned, the facts of the chosen route and the final text. Geometry is left out."""
+    report = _plain(state.get("report")) or {}
+    final = _plain(state.get("final")) or {}
+    chosen = report.get("chosen_route")
+    facts = [{k: c.get(k) for k in ROUTE_FACT_FIELDS}
+             for c in map(_plain, state.get("candidates") or []) if c and c.get("id") == chosen]
+    return {"item_id": record["item_id"], "utterance": record["utterance"],
+            "checks": report.get("checks", []), "must_mention": report.get("must_mention", []),
+            "route_facts": facts[0] if facts else None, "final_text": final.get("text", "")}
+
+
+def has_request_lines(req: pd.DataFrame, path: Path, step: str) -> bool:
+    """WP7 writes one request line per request; without them there is nothing to score yet."""
+    if req.empty or "item_id" not in req:
+        print(f"{step}: waiting for WP7 request lines in {path} (graph ran, but nothing was logged)")
+        return False
+    return True
 
 
 def load_logs(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -131,7 +160,18 @@ def step_end_to_end(run_id: str, logs_path: Path | None):
             logs_path, predicted = run_graph(gold.to_dict("records"), "D2", run_id)
         except ImportError:
             print("end_to_end: waiting for routechat.graph (WP0)"); return
+    if predicted:
+        RESULTS.mkdir(parents=True, exist_ok=True)
+        with open(RESULTS / "judge_inputs.jsonl", "w", encoding="utf-8") as f:
+            for p in predicted:
+                f.write(json.dumps(p["judge_input"], ensure_ascii=False, default=str) + "\n")
+        if os.environ.get("RUN_JUDGE") == "1":
+            from eval import judge as judge_mod
+            judge_mod.run_judge([p["judge_input"] for p in predicted], judge_mod.default_llm()) \
+                .to_csv(RESULTS / "judge_answers.csv", index=False)
     req, stg = load_logs(logs_path)
+    if not has_request_lines(req, logs_path, "end_to_end"):
+        step_extractor(run_id, gold, predicted); return
     truth_p = DATASETS / "d2_truth.csv"   # manual route inspections [file name to agree]
     truth = pd.read_csv(truth_p) if truth_p.exists() else None
     judge_p = RESULTS / "judge_answers.csv"
@@ -170,6 +210,8 @@ def step_adversarial(run_id: str, logs_path: Path | None):
         except ImportError:
             print("adversarial: waiting for routechat.graph (WP0)"); return
     req, _ = load_logs(logs_path)
+    if not has_request_lines(req, logs_path, "adversarial"):
+        return
     save(metrics.adversarial_pass_rate(req, gold), "adversarial.csv", run_id)
 
 
@@ -189,7 +231,7 @@ def main():
         step_end_to_end(run_id, a.logs)
     if a.all or a.adversarial:
         step_adversarial(run_id, a.logs)
-    # Judge, ablations, single-agent baseline and plots are added in weeks 2 and 3 (see WP10 plan).
+    # The LLM judge runs inside the D2 step when RUN_JUDGE=1, or on its own: python -m eval.judge
 
 
 if __name__ == "__main__":
