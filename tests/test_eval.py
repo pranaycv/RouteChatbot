@@ -181,3 +181,30 @@ def test_T_10_11_human_grading_sheet_and_judge_input(tmp_path):
     ji = judge_input({"item_id": "x1", "utterance": "u"}, state)
     assert ji["route_facts"]["distance_m"] == 4200 and "geometry" not in ji["route_facts"]
     assert ji["final_text"] == "Take Bloor." and ji["must_mention"] == ["hours_unconfirmed"]
+
+
+def test_T_10_12_request_line_from_final_state_is_valid():
+    # Built by the runner from a final TripState (models or dicts), it must pass the agreed schema.
+    from eval.run_eval import request_line
+    state = {"guard": {"decision": "allow"}, "classification": {"route_action": "plan", "primary_mode": "bike"},
+             "report": {"decision": "accept", "checks": [{"id": "highways", "status": "met", "hard": True, "evidence": "0 m"}],
+                        "must_mention": ["closures"], "sponsored": None},
+             "draft": {"mentioned_ids": ["closures"]}, "final": {"approved": True, "used_fallback_template": False}}
+    stages = [{"stage": "classify", "latency_ms": 12.5, "cost_usd": 0.001},
+              {"stage": "write", "latency_ms": 30.0, "cost_usd": 0.002}]
+    line = request_line({"item_id": "x1"}, state, "D2", "t", "D2_x1", stages)
+    assert validate_line(line) == []
+    assert line["outcome"] == "accept" and line["stopped_at"] == ""
+    assert math.isclose(line["cost_usd_total"], 0.003) and line["latency_ms_total"] == 42.5
+    crashed = request_line({"item_id": "x2"}, {"handoff": {"reason": "system_error"}, "final": {}}, "D2", "t", "D2_x2",
+                           [{"stage": "maps", "decision": "system_error", "latency_ms": 3.0, "cost_usd": 0.0}])
+    assert crashed["outcome"] == "handoff" and crashed["stopped_at"] == "maps"
+
+
+def test_T_11_05_sponsor_rate_measured_from_the_run():
+    req = pd.DataFrame([request_line("a", "accept"), request_line("b", "accept"), request_line("c", "refuse"),
+                        request_line("d", "accept")])
+    req["sponsored_shown"] = [True, False, False, False]
+    r = cost_model.measured_rates(req)
+    assert math.isclose(r["accept_rate"], 0.75) and math.isclose(r["cards_per_accepted_route"], 1 / 3)
+    assert cost_model.measured_rates(pd.DataFrame()) == {}

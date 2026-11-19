@@ -179,6 +179,19 @@ def finetune_breakeven(api_cost_per_class: float, ft_cost_per_class: float, a: d
     return fixed / saving if saving > 0 else math.inf
 
 
+def measured_rates(request_lines: pd.DataFrame) -> dict:
+    """Rates the cost model can take from the run instead of from assumptions:
+    accept_rate (share of requests accepted) and cards_per_accepted_route (share of accepted routes
+    that showed a sponsor card, at most one each under P-05). Empty when the run has no request lines."""
+    if request_lines.empty or "outcome" not in request_lines:
+        return {}
+    acc = request_lines[request_lines["outcome"] == "accept"]
+    out = {"accept_rate": float(len(acc) / len(request_lines))}
+    if len(acc) and "sponsored_shown" in acc:
+        out["cards_per_accepted_route"] = float(acc["sponsored_shown"].astype(bool).mean())
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--logs", required=True)
@@ -188,8 +201,17 @@ def main():
     a = load_assumptions()
     lines = [json.loads(x) for x in Path(args.logs).read_text().splitlines() if x.strip()]
     stage = pd.DataFrame([x for x in lines if x.get("stage") != "request"])
+    req = pd.DataFrame([x for x in lines if x.get("stage") == "request"])
     sr = pd.read_csv(args.success)["success"].mean() if args.success else NAN
-    table = monthly_table(per_request_usage(stage), sr, {}, load_prices(), a)
+    rates = measured_rates(req)
+    if "cards_per_accepted_route" in rates:
+        # Use what the run actually showed. The 0.6 in the assumptions is only a fallback: in the
+        # synthetic sponsor set each sponsor sits next to one anchor place, so most routes pass none.
+        print(f"cards per accepted route: measured {rates['cards_per_accepted_route']:.2f} "
+              f"(assumption was {a['revenue']['cards_per_accepted_route']})")
+        a["revenue"]["cards_per_accepted_route"] = rates["cards_per_accepted_route"]
+    table = monthly_table(per_request_usage(stage), sr, {k: v for k, v in rates.items() if k == "accept_rate"},
+                          load_prices(), a)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(args.out, index=False)
     print(table.to_string(index=False))

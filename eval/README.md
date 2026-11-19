@@ -56,6 +56,12 @@ uv run python -m eval.judge --agreement report/judge_grading_A.csv report/judge_
 - Cost assumptions filled from the Nov 14 proposal (no objections). Training cost is 0: about 45 min on
   Kaggle's free GPU (WP9). Classifier hosting assumes CPU [WP9 to confirm].
 
+- Until WP7's file logger lands, `run_eval` writes the run log itself: it copies the JSON stage lines
+  the stages already log (`routechat.llm.log_stage`, `graph._log_failure`) into `logs/<run_id>.jsonl` and
+  adds one request line per request, built from the final TripState. Set `EVAL_WRITE_REQUEST_LINES=0`
+  once WP7 writes its own. Checked on Nov 19 with WP2's classifier and WP3's extractor (replayed calls)
+  plus the stubs for the other stages.
+
 ## Still to agree
 
 - WP8: file names for D1 test, D2 (with `gold_constraints`), D3 and the 50-reply judge sample under `eval/datasets/`.

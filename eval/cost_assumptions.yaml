@@ -31,5 +31,5 @@ status_quo:                                  # Part C step 6. Main number is min
   value_of_time_usd_per_hour: null           # optional: only set if the team wants a dollar figure too
 
 revenue:
-  cards_per_accepted_route: 0.6              # at most 1 (P-05); none on safety or accessibility trips; range 0.3 to 1.0
+  cards_per_accepted_route: 0.6              # fallback only: cost_model uses the share measured in the run when request lines exist. At most 1 (P-05)
   usd_per_card: 0.05                         # per card shown: CPC x click rate ($1.75 x 3%); range 0.02 to 0.14
