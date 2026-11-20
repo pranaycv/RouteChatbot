@@ -1,0 +1,146 @@
+name,city,kind,lat,lon
+CN Tower,Toronto,landmark,43.6426,-79.3871
+Royal Ontario Museum,Toronto,museum,43.6677,-79.3948
+Art Gallery of Ontario,Toronto,museum,43.6536,-79.3925
+Kensington Market,Toronto,market,43.6547,-79.4005
+St. Lawrence Market,Toronto,market,43.6487,-79.3715
+Union Station,Toronto,station,43.6453,-79.3806
+High Park,Toronto,park,43.6465,-79.4637
+Casa Loma,Toronto,landmark,43.6780,-79.4094
+Distillery District,Toronto,landmark,43.6503,-79.3596
+Jack Layton Ferry Terminal,Toronto,landmark,43.6408,-79.3763
+Harbourfront Centre,Toronto,landmark,43.6386,-79.3817
+Ripley's Aquarium of Canada,Toronto,landmark,43.6424,-79.3860
+Rogers Centre,Toronto,venue,43.6414,-79.3894
+Scotiabank Arena,Toronto,venue,43.6435,-79.3791
+Nathan Phillips Square,Toronto,landmark,43.6525,-79.3832
+University of Toronto,Toronto,campus,43.6629,-79.3957
+Queen's Park,Toronto,park,43.6644,-79.3923
+Bata Shoe Museum,Toronto,museum,43.6670,-79.4001
+Hockey Hall of Fame,Toronto,museum,43.6472,-79.3774
+Evergreen Brick Works,Toronto,landmark,43.6844,-79.3649
+Toronto Zoo,Toronto,landmark,43.8177,-79.1859
+Toronto Pearson International Airport,Toronto,airport,43.6777,-79.6248
+Billy Bishop Toronto City Airport,Toronto,airport,43.6275,-79.3962
+Trinity Bellwoods Park,Toronto,park,43.6477,-79.4143
+Riverdale Park,Toronto,park,43.6683,-79.3584
+Sugar Beach,Toronto,park,43.6444,-79.3659
+Humber Bay Park,Toronto,park,43.6226,-79.4789
+Bluffer's Park,Toronto,park,43.7064,-79.2325
+Graffiti Alley,Toronto,landmark,43.6480,-79.3999
+Aga Khan Museum,Toronto,museum,43.7255,-79.3326
+Eaton Centre,Toronto,landmark,43.6544,-79.3807
+Yonge-Dundas Square,Toronto,landmark,43.6561,-79.3802
+Allan Gardens,Toronto,park,43.6623,-79.3745
+Woodbine Beach,Toronto,park,43.6633,-79.3085
+Cherry Beach,Toronto,park,43.6350,-79.3430
+Christie Pits Park,Toronto,park,43.6638,-79.4207
+Princes' Gates,Toronto,landmark,43.6322,-79.4177
+Fort York National Historic Site,Toronto,museum,43.6386,-79.4040
+Spadina Museum,Toronto,museum,43.6786,-79.4092
+Rouge Valley Trailhead,Toronto,trailhead,43.8023,-79.1450
+Bloor-Yonge Station,Toronto,station,43.6709,-79.3857
+King Station,Toronto,station,43.6491,-79.3777
+Osgoode Station,Toronto,station,43.6508,-79.3868
+St George Station,Toronto,station,43.6683,-79.3994
+Museum Station,Toronto,station,43.6679,-79.3935
+Dundas Station,Toronto,station,43.6561,-79.3811
+Parliament Hill,Ottawa,landmark,45.4236,-75.7009
+Ottawa Locks,Ottawa,landmark,45.4262,-75.6975
+ByWard Market,Ottawa,market,45.4290,-75.6918
+National Gallery of Canada,Ottawa,museum,45.4295,-75.6989
+Canadian Museum of History,Ottawa,museum,45.4301,-75.7088
+Canadian War Museum,Ottawa,museum,45.4170,-75.7173
+Notre-Dame Cathedral Basilica,Ottawa,landmark,45.4297,-75.6998
+Rideau Hall,Ottawa,landmark,45.4433,-75.6950
+Major's Hill Park,Ottawa,park,45.4283,-75.6992
+Dow's Lake,Ottawa,park,45.3963,-75.7006
+Canadian Museum of Nature,Ottawa,museum,45.4128,-75.6882
+Rideau Falls,Ottawa,landmark,45.4400,-75.6838
+Lansdowne Park,Ottawa,venue,45.3989,-75.6837
+Ottawa VIA Rail Station,Ottawa,station,45.4167,-75.6516
+Ottawa Macdonald-Cartier International Airport,Ottawa,airport,45.3225,-75.6692
+Gatineau Park Pink Lake Trailhead,Ottawa,trailhead,45.4834,-75.8388
+Mer Bleue Bog Trailhead,Ottawa,trailhead,45.3939,-75.5199
+Jacques-Cartier Park,Ottawa,park,45.4328,-75.7110
+Britannia Beach,Ottawa,park,45.3636,-75.8038
+University of Ottawa,Ottawa,campus,45.4231,-75.6831
+Carleton University,Ottawa,campus,45.3876,-75.6960
+Sparks Street,Ottawa,landmark,45.4225,-75.6985
+National Arts Centre,Ottawa,venue,45.4239,-75.6939
+Ottawa City Hall,Ottawa,landmark,45.4263,-75.6896
+Mooney's Bay Park,Ottawa,park,45.3685,-75.6879
+Strathcona Park,Ottawa,park,45.4254,-75.6773
+Hog's Back Falls,Ottawa,landmark,45.3706,-75.6927
+Vincent Massey Park,Ottawa,park,45.3790,-75.6861
+Central Experimental Farm Arboretum,Ottawa,park,45.3930,-75.7100
+Bayview Station,Ottawa,station,45.4094,-75.7233
+Lyon Station,Ottawa,station,45.4170,-75.7097
+Canadian Aviation and Space Museum,Ottawa,museum,45.4519,-75.6218
+Mount Royal Park Lookout,Montreal,landmark,45.5042,-73.5873
+Beaver Lake (Mount Royal),Montreal,trailhead,45.4990,-73.5934
+Notre-Dame Basilica of Montreal,Montreal,landmark,45.5045,-73.5566
+Old Port of Montreal,Montreal,landmark,45.5017,-73.5528
+Place Jacques-Cartier,Montreal,landmark,45.5074,-73.5536
+Jean-Talon Market,Montreal,market,45.5366,-73.6140
+Atwater Market,Montreal,market,45.4789,-73.5819
+Montreal Museum of Fine Arts,Montreal,museum,45.4986,-73.5795
+Montreal Botanical Garden,Montreal,park,45.5600,-73.5635
+Olympic Stadium,Montreal,venue,45.5579,-73.5516
+Biodome,Montreal,museum,45.5600,-73.5469
+Parc La Fontaine,Montreal,park,45.5262,-73.5700
+Saint Joseph's Oratory,Montreal,landmark,45.4920,-73.6177
+McGill University,Montreal,campus,45.5048,-73.5772
+Place des Arts,Montreal,venue,45.5079,-73.5679
+Lachine Canal Saint-Gabriel Lock,Montreal,trailhead,45.4777,-73.5693
+Parc Jean-Drapeau,Montreal,park,45.5128,-73.5334
+Biosphere,Montreal,museum,45.5143,-73.5338
+Pointe-a-Calliere Museum,Montreal,museum,45.5025,-73.5543
+Champ-de-Mars,Montreal,park,45.5093,-73.5538
+Montreal Chinatown Gate,Montreal,landmark,45.5073,-73.5598
+Place Emilie-Gamelin,Montreal,park,45.5149,-73.5611
+Berri-UQAM Station,Montreal,station,45.5153,-73.5611
+Lionel-Groulx Station,Montreal,station,45.4825,-73.5798
+Peel Station,Montreal,station,45.5008,-73.5747
+Montreal Central Station,Montreal,station,45.5003,-73.5666
+Montreal-Trudeau International Airport,Montreal,airport,45.4706,-73.7408
+Parc Angrignon,Montreal,park,45.4350,-73.6044
+Lachine Rapids Park,Montreal,park,45.4283,-73.6128
+Ile-de-la-Visitation Nature Park,Montreal,trailhead,45.6013,-73.6410
+Clock Tower Beach,Montreal,park,45.5013,-73.5489
+Square Saint-Louis,Montreal,park,45.5185,-73.5700
+Parc Jarry,Montreal,park,45.5303,-73.6207
+Bonsecours Market,Montreal,market,45.5078,-73.5521
+Banff Avenue,Banff,landmark,51.1784,-115.5708
+Banff Gondola,Banff,landmark,51.1438,-115.5714
+Banff Upper Hot Springs,Banff,landmark,51.1527,-115.5591
+Cave and Basin National Historic Site,Banff,museum,51.1671,-115.5860
+Bow Falls,Banff,landmark,51.1647,-115.5582
+Fairmont Banff Springs Viewpoint,Banff,landmark,51.1637,-115.5649
+Banff Park Museum,Banff,museum,51.1760,-115.5710
+Tunnel Mountain Trailhead,Banff,trailhead,51.1855,-115.5575
+Johnston Canyon Trailhead,Banff,trailhead,51.2454,-115.8392
+Lake Louise,Banff,landmark,51.4167,-116.2177
+Lake Louise Village,Banff,landmark,51.4254,-116.1773
+Moraine Lake,Banff,landmark,51.3217,-116.1860
+Sulphur Mountain Trailhead,Banff,trailhead,51.1445,-115.5690
+Lake Agnes Tea House,Banff,trailhead,51.4137,-116.2297
+Peyto Lake Viewpoint,Banff,landmark,51.7283,-116.5113
+Bow Lake,Banff,landmark,51.6619,-116.4630
+Vermilion Lakes,Banff,park,51.1740,-115.6075
+Lake Minnewanka,Banff,landmark,51.2538,-115.5107
+Two Jack Lake,Banff,park,51.2337,-115.4943
+Spray River Loop Trailhead,Banff,trailhead,51.1641,-115.5612
+Fenland Trail,Banff,trailhead,51.1818,-115.5846
+Banff Train Station,Banff,station,51.1766,-115.5764
+Calgary International Airport,Banff,airport,51.1139,-114.0203
+Columbia Icefield Discovery Centre,Banff,landmark,52.2208,-117.2231
+Sunshine Village,Banff,landmark,51.0778,-115.7620
+Whyte Museum of the Canadian Rockies,Banff,museum,51.1768,-115.5732
+Hoodoos Viewpoint,Banff,landmark,51.1855,-115.5540
+Canmore Downtown,Banff,landmark,51.0890,-115.3590
+Grassi Lakes Trailhead,Banff,trailhead,51.0842,-115.3516
+Canmore Nordic Centre,Banff,trailhead,51.0905,-115.3703
+Mount Norquay Base,Banff,landmark,51.2043,-115.5930
+Bankhead Historic Site,Banff,trailhead,51.2050,-115.4850
+Lake Louise Ski Resort Base,Banff,landmark,51.4430,-116.1621
