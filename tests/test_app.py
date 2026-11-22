@@ -28,6 +28,11 @@ def test_t_7_08_running_example_shows_the_map(tmp_path, monkeypatch):
     assert "What I checked" in visible
     assert "Nothing is waiting" in visible
     assert "deck_gl_json_chart" in _element_types(app._tree)
+    assert len(app.chat_message) == 2
+    new_chat = next(button for button in app.button if button.label == "New chat")
+    new_chat.click().run()
+    assert app.chat_message == []
+    assert any("New chat clears" in block.value for block in app.markdown)
 
 
 def _element_types(node) -> list[str]:
