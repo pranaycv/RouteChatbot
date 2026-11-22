@@ -90,8 +90,9 @@ def test_t_7_05_personal_data_uses_the_fallback(log_file):
     assert final.used_fallback_template is True
     assert "ada@example.com" not in final.text
     saved = log_file.read_text(encoding="utf-8")
+    # The stage line records which check failed and never the reply text.
     assert "ada@example.com" not in saved
-    assert "[EMAIL]" in saved
+    assert "Canadian Tire" not in saved
     assert "fallback:personal_data" in saved
 
 

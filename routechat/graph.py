@@ -29,6 +29,7 @@ from langgraph.graph import END, START, StateGraph
 
 from routechat.agents.templates import SYSTEM_ERROR_TEXT
 from routechat.config import get_settings
+from routechat.logging import install_stage_log, log_request
 from routechat.schemas import (
     ConstraintSet,
     FinalAnswer,
@@ -407,5 +408,13 @@ def build_graph(nodes: Mapping[str, NodeFn] | None = None):
 
 
 def invoke(payload: dict, nodes: Mapping[str, NodeFn] | None = None) -> dict:
-    """Run one request. The app reads state['final'] and state.get('handoff')."""
-    return build_graph(nodes).invoke(payload)
+    """Run one request. The app reads state['final'] and state.get('handoff').
+
+    WP7's logger copies the stages' JSON lines into the log file and gets one
+    request line here, after guard_out, with the end-to-end latency.
+    """
+    install_stage_log()
+    started = time.perf_counter()
+    state = build_graph(nodes).invoke(payload)
+    log_request(state, (time.perf_counter() - started) * 1000)
+    return state

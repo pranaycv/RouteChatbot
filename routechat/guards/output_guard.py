@@ -12,10 +12,11 @@ repaired in place.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from routechat.guards.input_guard import _mask_personal_data
-from routechat.logging import log_event
+from routechat.logging import stage_line
 from routechat.schemas import DisplayedStop, FinalAnswer, LineString
 
 # Case-insensitive phrases from the handbook. "guarantee" also catches "guaranteed".
@@ -226,6 +227,7 @@ def _stops(state: dict[str, Any]) -> list[DisplayedStop]:
 
 def output_guard(state: dict[str, Any]) -> dict[str, FinalAnswer]:
     """LangGraph node. Returns only the final answer."""
+    started = time.perf_counter()
     draft = state["draft"]
     report = state.get("report")
     candidate = _chosen(state)
@@ -250,12 +252,11 @@ def output_guard(state: dict[str, Any]) -> dict[str, FinalAnswer]:
             used_fallback_template=True,
         )
         decision = f"fallback:{failed}"
-    log_event(
-        {
-            "request_id": state.get("request_id", ""),
-            "stage": "guard_out",
-            "decision": decision,
-            "text": _field(draft, "message"),
-        }
+    # The check that failed is enough to count fallbacks; the reply text stays out of the log.
+    stage_line(
+        "guard_out",
+        str(state.get("request_id", "")),
+        decision,
+        (time.perf_counter() - started) * 1000,
     )
     return {"final": final}

@@ -26,7 +26,7 @@ import pydeck as pdk
 import streamlit as st
 
 from routechat.graph import invoke
-from routechat.logging import append_handoff, log_event, mask_for_log, read_handoffs
+from routechat.logging import append_handoff, mask_for_log, read_handoffs
 from routechat.stubs import RUNNING_UTTERANCE
 
 _ROUTE = [47, 120, 196]
@@ -566,14 +566,7 @@ def _ask(utterance: str) -> None:
         if hasattr(ticket, "model_dump"):
             ticket = ticket.model_dump()
         append_handoff(ticket)
-    log_event(
-        {
-            "request_id": request_id,
-            "stage": "app",
-            "decision": "fallback" if _field(final, "used_fallback_template") else "ok",
-            "text": utterance,
-        }
-    )
+    # graph.invoke already wrote this request's line; the app adds no second copy.
     st.session_state.last = state
 
 
