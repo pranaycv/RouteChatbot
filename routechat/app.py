@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import os
 from html import escape
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 os.environ.setdefault("STUBS", "1")
 
+import orjson
 import pydeck as pdk
 import streamlit as st
 
@@ -33,6 +35,8 @@ _START = [47, 120, 196, 230]
 _STOP = [224, 161, 90, 235]
 _END = [224, 122, 114, 230]
 _SPONSOR = [91, 159, 224, 220]
+_SPONSOR_INK = [31, 94, 158, 255]
+SPONSOR_LABEL = "Sponsored"
 
 _CSS = """
 <style>
@@ -436,6 +440,7 @@ button:focus-visible {
 .rc-legend i.start { background: #2f78c4; }
 .rc-legend i.stop { background: #e0a15a; }
 .rc-legend i.end { background: #e07a72; }
+.rc-legend i.sponsored { background: #5b9fe0; }
 .rc-caption { margin: 8px 2px 0; }
 
 .st-key-facts { margin: 0 !important; min-height: 0; overflow: visible; gap: 12px !important; }
@@ -592,6 +597,118 @@ def _pretty_id(raw: str) -> str:
     return " · ".join(part.strip().title() for part in parts if part.strip())
 
 
+def _sponsor_label_layer(sponsors: list[Any]) -> pdk.Layer:
+    """A visible "Sponsored" tag over each sponsor pin, so the label never depends on hovering (P-05)."""
+    return pdk.Layer(
+        "TextLayer",
+        [
+            {"coordinates": [_field(item, "lon"), _field(item, "lat")], "label": SPONSOR_LABEL}
+            for item in sponsors
+        ],
+        get_position="coordinates",
+        get_text="label",
+        get_size=12,
+        get_color=_SPONSOR_INK,
+        get_pixel_offset=[0, -20],
+        get_text_anchor="'middle'",
+        get_alignment_baseline="'bottom'",
+        font_family="'Inter, \"SF Pro Text\", \"Segoe UI\", system-ui, sans-serif'",
+        font_weight=600,
+        background=True,
+        get_background_color=[255, 255, 255, 235],
+        background_padding=[6, 3, 6, 3],
+        get_border_color=_SPONSOR,
+        get_border_width=1,
+        pickable=False,
+    )
+
+
+def sponsors_path() -> Path:
+    """The WP8 sponsor catalog (D4). ROUTECHAT_SPONSORS overrides it, for tests."""
+    override = os.environ.get("ROUTECHAT_SPONSORS")
+    return Path(override) if override else Path(__file__).resolve().parents[1] / "data" / "sponsors.json"
+
+
+def load_sponsors() -> list[dict[str, Any]]:
+    """Every catalog entry with usable coordinates. A missing or broken file gives an empty list."""
+    try:
+        records = orjson.loads(sponsors_path().read_bytes())
+    except (OSError, orjson.JSONDecodeError):
+        return []
+    if not isinstance(records, list):
+        return []
+    return [
+        record
+        for record in records
+        if isinstance(record, dict)
+        and isinstance(record.get("lat"), (int, float))
+        and isinstance(record.get("lon"), (int, float))
+    ]
+
+
+def _catalog_layers(sponsors: list[dict[str, Any]]) -> list[pdk.Layer]:
+    """The browse view: every catalog sponsor, each pin tagged "Sponsored" on screen (P-05)."""
+    points = [
+        {
+            "coordinates": [record["lon"], record["lat"]],
+            "tip": " · ".join(
+                str(part)
+                for part in (
+                    SPONSOR_LABEL,
+                    record.get("name"),
+                    str(record.get("category") or "").replace("_", " "),
+                    f"rating {record['rating']}" if record.get("rating") is not None else None,
+                )
+                if part
+            ),
+            "color": _SPONSOR,
+        }
+        for record in sponsors
+    ]
+    if not points:
+        return []
+    return [
+        pdk.Layer(
+            "ScatterplotLayer",
+            points,
+            get_position="coordinates",
+            get_fill_color="color",
+            get_line_color=[255, 255, 255],
+            stroked=True,
+            line_width_min_pixels=2,
+            get_radius=60,
+            radius_min_pixels=6,
+            pickable=True,
+        ),
+        _sponsor_label_layer(sponsors),
+    ]
+
+
+def _sponsor_toggle() -> bool:
+    available = bool(load_sponsors())
+    shown = st.toggle(
+        "Show sponsors",
+        key="show_sponsors",
+        disabled=not available,
+        help="Every sponsor in the catalog, each labelled Sponsored."
+        if available
+        else "No sponsor catalog found at data/sponsors.json.",
+    )
+    return bool(shown and available)
+
+
+def _legend_html(has_sponsor: bool) -> str:
+    sponsor = "<span><i class='sponsored'></i>Sponsored</span>" if has_sponsor else ""
+    return (
+        "<div class='rc-legend'>"
+        "<span><i class='start'></i>Start</span>"
+        "<span><i class='stop'></i>Stop</span>"
+        "<span><i class='end'></i>End</span>"
+        f"{sponsor}"
+        "</div>"
+    )
+
+
 def _map(state: dict[str, Any]) -> None:
     final = state.get("final")
     geometry = _field(final, "route_geojson")
@@ -658,9 +775,13 @@ def _map(state: dict[str, Any]) -> None:
                 pickable=True,
             )
         )
+    if sponsored is not None:
+        layers.append(_sponsor_label_layer([sponsored]))
     if not layers:
         return
     focus = coords or [point["coordinates"] for point in points]
+    catalog = _shown_catalog(sponsored)
+    layers.extend(_catalog_layers(catalog))
     deck = pdk.Deck(
         layers=layers,
         initial_view_state=_view(focus),
@@ -669,14 +790,26 @@ def _map(state: dict[str, Any]) -> None:
         tooltip={"text": "{tip}"},
     )
     st.pydeck_chart(deck, height=640)
-    st.markdown(
-        "<div class='rc-legend'>"
-        "<span><i class='start'></i>Start</span>"
-        "<span><i class='stop'></i>Stop</span>"
-        "<span><i class='end'></i>End</span>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    _map_footer(sponsored is not None or bool(catalog))
+
+
+def _shown_catalog(sponsored: Any = None) -> list[dict[str, Any]]:
+    """Catalog sponsors to draw when the toggle is on, minus the one the route already shows."""
+    if not st.session_state.get("show_sponsors"):
+        return []
+    taken = None
+    if sponsored is not None:
+        taken = (_field(sponsored, "lon"), _field(sponsored, "lat"))
+    return [record for record in load_sponsors() if (record["lon"], record["lat"]) != taken]
+
+
+def _map_footer(has_sponsor: bool) -> None:
+    with st.container(key="mapfoot"):
+        legend, toggle = st.columns([1, 0.5], vertical_alignment="center", gap=12)
+        with legend:
+            st.markdown(_legend_html(has_sponsor), unsafe_allow_html=True)
+        with toggle:
+            _sponsor_toggle()
 
 
 def _metrics(state: dict[str, Any]) -> None:
@@ -814,12 +947,16 @@ def _support() -> None:
 
 def _base_map() -> None:
     """Downtown Toronto, shown before a route exists so the map already fills the screen."""
+    catalog = _shown_catalog()
     deck = pdk.Deck(
+        layers=_catalog_layers(catalog),
         initial_view_state=pdk.ViewState(latitude=43.6532, longitude=-79.3832, zoom=12, pitch=0),
         map_provider="carto",
         map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+        tooltip={"text": "{tip}"},
     )
     st.pydeck_chart(deck, height=720)
+    _map_footer(bool(catalog))
 
 
 def _facts(state: dict[str, Any]) -> None:
