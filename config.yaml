@@ -37,7 +37,7 @@ maps:
   attempts: 2
   wait_s: 1
   # Optional ISO 3166 alpha-2 filter for place search, such as ca. null searches every country.
-  geocode_country: null
+  geocode_country: ca
   detour_min_km: 3
   detour_fraction: 0.30
   # GraphHopper custom-model multipliers. The free plan may reject ch.disable;
