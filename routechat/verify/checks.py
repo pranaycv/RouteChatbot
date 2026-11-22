@@ -86,3 +86,32 @@ def check_highways(
             f"(maximum {maximum_m:g} m)."
         ),
     )
+
+
+def check_flatness(route: RouteCandidate) -> Check:
+    """Check the climb per kilometre when the user prefers a flat route."""
+    maximum = get_settings().verifier.flat_max_climb_m_per_km
+    ascent_m = route.ascend_m
+    distance_m = route.distance_m
+    if (
+        ascent_m is None
+        or distance_m is None
+        or not isfinite(ascent_m)
+        or not isfinite(distance_m)
+        or ascent_m < 0
+        or distance_m <= 0
+    ):
+        return Check(
+            id="flat",
+            status="unverifiable",
+            hard=False,
+            evidence="The provider did not return valid ascent and distance data.",
+        )
+
+    climb_per_km = (ascent_m / distance_m) * 1000
+    return Check(
+        id="flat",
+        status="met" if climb_per_km <= maximum else "unmet",
+        hard=False,
+        evidence=f"{climb_per_km:g} m climb per km (maximum {maximum:g}).",
+    )

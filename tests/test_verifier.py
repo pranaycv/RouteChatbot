@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from routechat.schemas import RouteCandidate
-from routechat.verify.checks import check_bike_lanes, check_highways
+from routechat.verify.checks import check_bike_lanes, check_flatness, check_highways
 
 
 @pytest.mark.parametrize(
@@ -137,3 +137,32 @@ def test_highway_check_uses_configured_threshold(monkeypatch):
 
     assert result.status == "unmet"
     assert "maximum 100 m" in result.evidence
+
+
+@pytest.mark.parametrize(
+    ("ascent_m", "distance_m", "expected_status"),
+    [
+        (0, 2000, "met"),
+        (20, 2000, "met"),
+        (21, 2000, "unmet"),
+        (None, 2000, "unverifiable"),
+        (20, 0, "unverifiable"),
+        (-1, 2000, "unverifiable"),
+        (20, float("inf"), "unverifiable"),
+    ],
+)
+def test_flatness_check(ascent_m, distance_m, expected_status):
+    route = RouteCandidate(
+        id="test_route",
+        mode="bike",
+        provider="test",
+        ascend_m=ascent_m,
+        distance_m=distance_m,
+    )
+
+    result = check_flatness(route)
+
+    assert result.id == "flat"
+    assert result.status == expected_status
+    assert result.hard is False
+    assert result.evidence
