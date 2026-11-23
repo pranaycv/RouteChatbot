@@ -208,3 +208,68 @@ def test_T_11_05_sponsor_rate_measured_from_the_run():
     r = cost_model.measured_rates(req)
     assert math.isclose(r["accept_rate"], 0.75) and math.isclose(r["cards_per_accepted_route"], 1 / 3)
     assert cost_model.measured_rates(pd.DataFrame()) == {}
+
+
+def test_T_10_13_judge_agreement_with_one_grader():
+    # One grader is enough to run the check; the person-vs-person column is NaN, never a made-up value.
+    rows = lambda ans: pd.DataFrame([{"item_id": i, "question": q, "answer": a}
+                                     for i, a in enumerate(ans) for q in metrics.JUDGE_QUESTIONS])
+    judge_df, human = rows([True, False, True, False]), rows([True, False, True, True])
+    one = metrics.judge_agreement(judge_df, human)
+    assert len(one) == len(metrics.JUDGE_QUESTIONS)
+    assert one["kappa_human_human"].isna().all() and one["kappa_judge_human_b"].isna().all()
+    assert (one["n"] == 4).all() and one["kappa_judge_human_a"].between(-1, 1).all()
+    two = metrics.judge_agreement(judge_df, human, human)
+    assert (two["kappa_human_human"] == 1.0).all()
+
+
+def test_T_10_14_route_review_sheet_and_false_met():
+    from eval import route_review
+    inputs = [{"item_id": f"d2_{i:03d}", "utterance": "u", "route_facts": {"mode": "car"},
+               "checks": [{"id": "avoid:highways", "status": "met", "hard": True, "evidence": "0 m"},
+                          {"id": "flat", "status": "met", "hard": False, "evidence": "10 m"}]} for i in range(6)]
+    e2e = pd.DataFrame({"item_id": [r["item_id"] for r in inputs], "outcome": ["accept"] * 5 + ["handoff"]})
+    sheet = route_review.build_sheet(inputs, e2e, ["A", "B"], n_routes=4)
+    assert sheet["item_id"].nunique() == 4 and "d2_005" not in set(sheet["item_id"])   # accepted routes only
+    assert set(sheet["reviewer"]) == {"A", "B"} and len(sheet) == 8
+    ids = sorted(sheet["item_id"].unique())
+    sheet["reviewer_status"] = "met"
+    sheet.loc[(sheet["item_id"] == ids[0]) & (sheet["check_id"] == "avoid:highways"), "reviewer_status"] = "unmet"
+    sheet.loc[sheet["item_id"] == ids[1], "reviewer_status"] = ""                        # not reviewed yet
+    truth, stats = route_review.score(sheet)
+    t = truth.set_index("item_id")["hard_truly_met"]
+    assert not t[ids[0]] and t[ids[2]] and ids[1] not in t.index                        # blank rows are not judged
+    assert stats["false_met"] == 1 and stats["checks_verifier_met"] == 6 and stats["rows_left_blank"] == 2
+
+
+def test_T_10_15_truth_covers_some_routes_and_p09_not_covered():
+    gold = pd.DataFrame({"item_id": ["a", "b", "c", "d"], "expected_outcome": ["accept"] * 4,
+                         "gold_constraints": [{"mode": "car"}, {"mode": "car"}, {"mode": "hike"}, {"mode": "car"}]})
+    met = [{"id": "x", "status": "met", "hard": True}]
+    logs = pd.DataFrame({"item_id": ["a", "b", "c", "d"], "outcome": ["accept", "accept", "handoff", "handoff"],
+                         "checks": [met, met, [], []],
+                         "handoff_reason": ["", "", "mode_not_supported", "mode_not_supported"]})
+    truth = pd.DataFrame({"item_id": ["a"], "hard_truly_met": [False]})                 # only route a was inspected
+    ts = metrics.trip_success(logs, gold, None, truth).set_index("item_id")
+    assert not ts.loc["a", "success"] and ts.loc["a", "truth_source"] == "human"
+    assert ts.loc["b", "success"] and ts.loc["b", "truth_source"] == "verifier_only"    # not inspected is not a failure
+    assert ts.loc["c", "success"] and ts.loc["c", "not_covered_p09"]                    # hike: "not covered yet" is right
+    assert not ts.loc["d", "success"]                                                   # a car trip handed off is not
+
+
+def test_T_11_06_unknown_api_name_is_never_free():
+    a = cost_model.load_assumptions()
+    prices = cost_model.load_prices()
+    assert cost_model.unpriced_api_names({"geocode": 1, "graphhopper": 1, "directions": 1}, a) == []
+    assert cost_model.unpriced_api_names({"new_api": 2}, a) == ["new_api"]
+    assert math.isnan(cost_model.mapbox_cost({"new_api": 2, "directions": 1}, 1_000_000, prices, a))
+    priced = cost_model.mapbox_cost({"geocode": 1}, 1_000_000, prices, a)
+    assert priced == cost_model.mapbox_cost({"geocoding": 1}, 1_000_000, prices, a) > 0
+
+
+def test_T_10_16_extractor_accuracy_with_missing_values():
+    # D2 rows read through pandas carry NaN where a list is missing; that must compare as an empty list.
+    gold = pd.DataFrame({"item_id": ["a", "b"], "avoid": [["highways"], float("nan")], "mode": ["car", "bike"]})
+    pred = pd.DataFrame({"item_id": ["a", "b"], "avoid": [["highways"], []], "mode": ["car", "walk"]})
+    acc = metrics.extraction_field_accuracy(pred, gold, ["avoid", "mode"]).set_index("field")["accuracy"]
+    assert acc["avoid"] == 1.0 and acc["mode"] == 0.5

@@ -61,11 +61,13 @@ def missing_inputs(assumptions: dict) -> list[str]:
 
 def per_request_usage(stage_logs: pd.DataFrame) -> dict:
     """Average per request: model cost (already priced per call in the logs) and API calls by name."""
+    if stage_logs.empty or "request_id" not in stage_logs:   # a run with stubs logs no stage lines
+        return {"requests": 0, "model_cost_per_request": NAN, "api_calls_per_request": {}}
     n = stage_logs["request_id"].nunique()
     model_cost = stage_logs["cost_usd"].sum() / n if n else NAN
     calls = {}
-    for d in stage_logs["api_calls"]:
-        for k, v in (d or {}).items():
+    for d in (stage_logs["api_calls"] if "api_calls" in stage_logs else []):
+        for k, v in (d if isinstance(d, dict) else {}).items():
             calls[k] = calls.get(k, 0) + v
     return {"requests": n, "model_cost_per_request": model_cost,
             "api_calls_per_request": {k: v / n for k, v in calls.items()}}
@@ -91,9 +93,18 @@ def tiered_cost(calls: float, tiers: list) -> float:
     return total
 
 
+def unpriced_api_names(calls_per_request: dict, a: dict) -> list[str]:
+    """Logged API names that have no price line in the assumptions and are not billed elsewhere.
+    The Mapbox cost is NaN while this list is not empty, so a renamed API can never be counted as free."""
+    known = set(a["api_to_price"]) | set(a.get("not_billed_here", ("graphhopper", "openai", "openrouter")))
+    return sorted(k for k in calls_per_request if k not in known)
+
+
 def mapbox_cost(calls_per_request: dict, volume: int, prices, a: dict) -> float:
     """Monthly Mapbox cost at a volume. Calls to the same price line (e.g. both Search Box endpoints)
     are added up first, because Mapbox counts them together against one free tier."""
+    if unpriced_api_names(calls_per_request, a):
+        return NAN   # a logged API with no price line must show up, not count as free
     by_price: dict[str, float] = {}
     for api, per_req in calls_per_request.items():
         line = a["api_to_price"].get(api)
@@ -210,7 +221,14 @@ def main():
         print(f"cards per accepted route: measured {rates['cards_per_accepted_route']:.2f} "
               f"(assumption was {a['revenue']['cards_per_accepted_route']})")
         a["revenue"]["cards_per_accepted_route"] = rates["cards_per_accepted_route"]
-    table = monthly_table(per_request_usage(stage), sr, {k: v for k, v in rates.items() if k == "accept_rate"},
+    usage = per_request_usage(stage)
+    if unpriced_api_names(usage["api_calls_per_request"], a):
+        print("WARNING: API names in the log with no price line in eval/cost_assumptions.yaml (Mapbox cost is NaN):",
+              ", ".join(unpriced_api_names(usage["api_calls_per_request"], a)))
+    if not any(usage["api_calls_per_request"].values()):
+        print("WARNING: the log has no map API calls. A replayed run (FIXTURES=replay) makes none, so map cost "
+              "shows as 0; use a live or recorded run for the cost numbers.")
+    table = monthly_table(usage, sr, {k: v for k, v in rates.items() if k == "accept_rate"},
                           load_prices(), a)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(args.out, index=False)

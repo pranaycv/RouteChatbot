@@ -10,6 +10,7 @@ two teammates grade the same replies and we report Cohen's kappa per question (t
 
     uv run python -m eval.judge                                   # judge every reply from the last D2 run
     uv run python -m eval.judge --agreement report/judge_grading_A.csv report/judge_grading_B.csv
+    uv run python -m eval.judge --agreement report/judge_grading_A.csv     # if only one person grades
 
 Inputs come from eval/results/judge_inputs.jsonl, written by run_eval's D2 step. Like the rest of
 eval/results it is git-ignored, because replies can quote the user's places.
@@ -117,8 +118,8 @@ def load_human_grading(path: Path) -> pd.DataFrame:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--inputs", type=Path, default=INPUTS)
-    ap.add_argument("--agreement", nargs=2, type=Path, metavar=("GRADER_A", "GRADER_B"),
-                    help="two filled grading sheets; compares them with each other and with the judge")
+    ap.add_argument("--agreement", nargs="+", type=Path, metavar="GRADER",
+                    help="one or two filled grading sheets; compares them with the judge (and with each other)")
     a = ap.parse_args()
     RESULTS.mkdir(parents=True, exist_ok=True)
     if a.agreement:
@@ -126,7 +127,10 @@ def main():
             print(f"agreement: run the judge first ({ANSWERS} is missing)"); return
         judge = pd.read_csv(ANSWERS).dropna(subset=["answer"])
         judge["answer"] = judge["answer"].astype(bool)
-        k = metrics.judge_agreement(judge, load_human_grading(a.agreement[0]), load_human_grading(a.agreement[1]))
+        if len(a.agreement) > 2:
+            print("agreement: give one or two grading sheets"); return
+        second = load_human_grading(a.agreement[1]) if len(a.agreement) == 2 else None
+        k = metrics.judge_agreement(judge, load_human_grading(a.agreement[0]), second)
         k.to_csv(RESULTS / "judge_agreement.csv", index=False)
         print(k.to_string(index=False)); return
     if not a.inputs.exists():

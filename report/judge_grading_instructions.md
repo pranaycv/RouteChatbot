@@ -23,4 +23,7 @@ Rules:
 Then: `uv run python -m eval.judge --agreement report/judge_grading_A.csv report/judge_grading_B.csv`
 gives Cohen's kappa per question, person vs person and judge vs each person. Target 0.6 or more.
 
+If only one person grades: run the same command with just `report/judge_grading_A.csv`. It reports
+judge vs that person only; the report then says the judge was checked against one grader.
+
 Time needed: about 1 to 2 minutes per reply [estimate], so 1 to 1.5 hours each.

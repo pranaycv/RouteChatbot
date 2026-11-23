@@ -70,23 +70,32 @@ def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, lis
     os.environ["RUN_ID"] = run_id; os.environ["EVAL_DATASET"] = dataset
     log_path = Path("logs") / f"{run_id}.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    capture = StageLineCapture(log_path)
+    # EVAL_WRITE_REQUEST_LINES=0 hands the run log over to WP7's logger (routechat/logging.py): it writes
+    # the stage lines and its own request line straight into this run's file, and the runner writes nothing.
+    use_wp7 = os.environ.get("EVAL_WRITE_REQUEST_LINES", "1") == "0"
+    if use_wp7:
+        os.environ["ROUTECHAT_LOG"] = str(log_path)
+    capture = None if use_wp7 else StageLineCapture(log_path)
     predicted = []
     try:
         for r in records:
             os.environ["EVAL_ITEM_ID"] = r["item_id"]
             request_id = f"{dataset}_{r['item_id']}"
-            capture.start(request_id)
+            if capture:
+                capture.start(request_id)
+            t0 = time.perf_counter()
             state = invoke({"request_id": request_id, "utterance": r["utterance"],
-                            "turn_index": r.get("turn_index", 0), "known": r.get("known"),
-                            "clarify_count": r.get("clarify_count", 0), "revision_count": 0})
-            if os.environ.get("EVAL_WRITE_REQUEST_LINES", "1") == "1":
-                capture.write(request_line(r, state, dataset, run_id, request_id, capture.lines))
+                            "turn_index": _or(r.get("turn_index"), 0), "known": _or(r.get("known"), None),
+                            "clarify_count": _or(r.get("clarify_count"), 0), "revision_count": 0})
+            wall_ms = (time.perf_counter() - t0) * 1000
+            if capture:
+                capture.write(request_line(r, state, dataset, run_id, request_id, capture.lines, wall_ms))
             con = _plain(state.get("constraints"))
             predicted.append({"item_id": r["item_id"], "constraints": con,
                               "judge_input": judge_input(r, state)})
     finally:
-        capture.close()
+        if capture:
+            capture.close()
     return log_path, predicted
 
 
@@ -147,7 +156,13 @@ def _stopped_at(st: dict) -> str:
     return ""
 
 
-def request_line(record: dict, state: dict, dataset: str, run_id: str, request_id: str, stage_lines: list[dict]) -> dict:
+def _or(value, default):
+    """Dataset rows come through pandas, where a missing field is NaN. Treat that as missing."""
+    return default if value is None or (isinstance(value, float) and value != value) else value
+
+
+def request_line(record: dict, state: dict, dataset: str, run_id: str, request_id: str, stage_lines: list[dict],
+                 wall_ms: float | None = None) -> dict:
     """The per-request summary line (Evaluation Spec, Table 3), built from the final TripState.
     Written by the evaluation runner until WP7's logger writes its own. Holds no message text."""
     st = _deep_plain(state)
@@ -155,7 +170,7 @@ def request_line(record: dict, state: dict, dataset: str, run_id: str, request_i
     draft, final, ticket = st.get("draft") or {}, st.get("final") or {}, st.get("handoff") or {}
     return {
         "request_id": request_id, "stage": "request", "run_id": run_id, "git_commit": git_commit(),
-        "dataset": dataset, "item_id": record["item_id"], "turn_index": int(record.get("turn_index", 0)),
+        "dataset": dataset, "item_id": record["item_id"], "turn_index": int(_or(record.get("turn_index"), 0)),
         "outcome": outcome_from_state(st), "route_action": cls.get("route_action", ""),
         "primary_mode": cls.get("primary_mode", ""), "revision_count": int(st.get("revision_count", 0)),
         "checks": [{"id": c.get("id"), "status": c.get("status"), "hard": c.get("hard")} for c in rep.get("checks", [])],
@@ -165,7 +180,8 @@ def request_line(record: dict, state: dict, dataset: str, run_id: str, request_i
         "handoff_reason": ticket.get("reason") or rep.get("handoff_reason") or "",
         "stopped_at": next((l["stage"] for l in stage_lines if l.get("decision") in ("system_error", "timeout")),
                            _stopped_at(st)),
-        "latency_ms_total": float(sum(l.get("latency_ms", 0) or 0 for l in stage_lines)),
+        # wall clock around graph.invoke when the runner has it; the sum of stage latencies misses the graph's own time
+        "latency_ms_total": float(wall_ms if wall_ms is not None else sum(l.get("latency_ms", 0) or 0 for l in stage_lines)),
         "cost_usd_total": float(sum(l.get("cost_usd", 0) or 0 for l in stage_lines)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }
@@ -280,13 +296,16 @@ def step_end_to_end(run_id: str, logs_path: Path | None):
     req, stg = load_logs(logs_path)
     if not has_request_lines(req, logs_path, "end_to_end"):
         step_extractor(run_id, gold, predicted); return
-    truth_p = DATASETS / "d2_truth.csv"   # manual route inspections [file name to agree]
+    truth_p = DATASETS / "d2_truth.csv"   # written by eval.route_review --score from the manual route inspections
     truth = pd.read_csv(truth_p) if truth_p.exists() else None
     judge_p = RESULTS / "judge_answers.csv"
     judge = pd.read_csv(judge_p) if judge_p.exists() else None
     ts = metrics.trip_success(req, gold, judge, truth)
     save(ts, "end_to_end.csv", run_id)
+    accepted = ts[ts["outcome"] == "accept"]
     summary = {"trip_success_rate": metrics.rate(ts["success"]),
+               "accepted": len(accepted), "accepted_checked_by_person": int((accepted["truth_source"] == "human").sum()),
+               "not_covered_p09": int(ts["not_covered_p09"].sum()),
                **metrics.handoff_precision_recall(req, gold),
                **metrics.cost_per_success(req, ts["success"])}
     save(pd.DataFrame([summary]), "end_to_end_summary.csv", run_id)
@@ -300,9 +319,12 @@ def step_extractor(run_id: str, gold: pd.DataFrame, predicted: list[dict] | None
     if not predicted or "gold_constraints" not in gold:
         print("extractor: needs a fresh D2 run and gold_constraints in D2 (WP8)"); return
     save(pd.DataFrame(predicted), "predicted_constraints.csv", run_id)
-    flat = lambda rows, key: pd.DataFrame([{"item_id": r["item_id"], **(r[key] or {})} for r in rows])
+    # Only requests that have a gold ConstraintSet and reached the extractor: a refused request has neither.
+    flat = lambda rows, key: pd.DataFrame([{"item_id": r["item_id"], **r[key]} for r in rows if isinstance(r.get(key), dict)])
     pred = flat(predicted, "constraints")
     gold_c = flat(gold.to_dict("records"), "gold_constraints")
+    if pred.empty or gold_c.empty:
+        print("extractor: no request reached the extractor in this run, nothing to compare"); return
     fields = [f for f in EXTRACTOR_FIELDS if f in gold_c and f in pred]
     save(metrics.extraction_field_accuracy(pred, gold_c, fields), "extractor.csv", run_id)
 
@@ -331,7 +353,8 @@ def main():
     ap.add_argument("--adversarial", action="store_true")
     ap.add_argument("--logs", type=Path, help="reuse an existing log file instead of running the graph")
     a = ap.parse_args()
-    run_id = f"eval_{time.strftime('%Y%m%d_%H%M')}_{uuid.uuid4().hex[:4]}"
+    # RUN_ID from the environment wins, so eval/final_run.sh can name the log files it passes on
+    run_id = os.environ.get("RUN_ID") or f"eval_{time.strftime('%Y%m%d_%H%M')}_{uuid.uuid4().hex[:4]}"
     print("run_id", run_id, "commit", git_commit())
     if a.all or a.classifier:
         step_classifier(run_id)

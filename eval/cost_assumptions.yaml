@@ -6,8 +6,10 @@ volumes: [1000, 100000, 1000000]     # requests per month (WP11 Part C step 3)
 days_per_month: 30
 
 # Which config.yaml Mapbox price each logged api_calls name uses.
+not_billed_here: [graphhopper, openai, openrouter]   # GraphHopper is priced by plan; model calls are already in cost_usd
 api_to_price:
   directions: directions
+  geocode: temporary_geocoding               # the name WP4's map client logs
   geocoding: temporary_geocoding
   searchbox: search_box_requests             # [check that /forward is billed per request, not per session]
   searchbox_category: search_box_requests
