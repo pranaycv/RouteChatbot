@@ -373,7 +373,7 @@ def test_T_8_30_omit_rule_and_prompt_versions():
     assert "must NOT say where" in P._omit_rule(cl)
     pl = next(j for j in jobs if j["labels"]["route_action"] == "plan")
     assert "must NOT" not in P._omit_rule(pl)
-    assert P.PROMPT_VERSION == "gen_v2" and P.RELABEL_PROMPT_VERSION == "relabel_v2"
+    assert P.PROMPT_VERSION == "gen_v3" and P.RELABEL_PROMPT_VERSION == "relabel_v3"
     assert "multimodal" in P.load_prompt(P.RELABEL_PROMPT_VERSION)[1]
 
 
@@ -381,3 +381,33 @@ def test_T_8_31_extract_json_ignores_trailing_garbage():
     from data_gen import pipeline
     obj, err = pipeline.extract_json('{"message": "hi"}\nOUS."}\nOUS."}')
     assert err is None and obj["message"] == "hi"
+
+
+def test_T_8_32_refusal_cue_rules():
+    from data_gen import pipeline as P
+    assert not P.refusal_cue_ok("out_of_scope_mode", "I'm on my bike, I don't want to use the subway.")
+    assert P.refusal_cue_ok("out_of_scope_mode", "How do I get there using the subway?")
+    assert not P.refusal_cue_ok("out_of_scope_b2b", "Plan a stroller-friendly walk for our group of friends")
+    assert P.refusal_cue_ok("out_of_scope_b2b", "I have 15 drop-offs with time windows")
+    assert not P.refusal_cue_ok("live_parking_or_inventory", "walk from the station to my hotel")
+    assert P.refusal_cue_ok("live_parking_or_inventory", "is there any parking left near the market?")
+
+
+def test_T_8_33_live_cue_and_majority():
+    from data_gen import pipeline as P
+    assert P.live_cue("is traffic bad rn?") and P.live_cue("be there by 8am")
+    assert not P.live_cue("how long is the walk, I'm going by bike")
+    v = [{f: a for f, a in zip(("route_action", "primary_mode", "needs_live_data", "clarify_field", "refusal_reason"),
+                               (x, "bike", False, "none", "none"))} for x in ("plan", "clarify", "clarify")]
+    assert P.majority_labels(v)["route_action"] == "clarify"
+
+
+def test_T_8_34_followup_slots_match_known():
+    from data_gen import sampling, pipeline as P
+    jobs = [j for j in sampling.build_jobs(120, 3) if j["turn"] == 1 and j["known"].get("destination")]
+    assert jobs
+    for j in jobs:
+        s = P.make_slots(j)
+        assert s["landmark"] == j["known"]["destination"]
+        if j["known"].get("origin"):
+            assert s["landmark_2"] == j["known"]["origin"]

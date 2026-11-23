@@ -45,8 +45,8 @@ try:
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore
 
-PROMPT_VERSION = "gen_v2"
-RELABEL_PROMPT_VERSION = "relabel_v2"
+PROMPT_VERSION = "gen_v3"
+RELABEL_PROMPT_VERSION = "relabel_v3"
 DEFAULT_OUT = "data/d1"
 DEFAULT_CACHE = "data_gen/cache/synth_llm"    # git-ignored by the repo .gitignore
 
@@ -311,7 +311,7 @@ def make_slots(job: dict) -> Dict[str, str]:
     l2 = b.pick(city, "landmark", rng, exclude=(l1["name"],))
     when = rng.choice(["7:30 pm", "8am", "noon", "5:15", "18:45", "9:00", "half past six", "10:15 tonight"])
     day = rng.choice(["Saturday", "Sunday", "tomorrow", "Friday evening", "this weekend", "Nov 22", "June 3rd"])
-    return {
+    slots = {
         "user_name": fake.name(), "friend_name": fake.first_name(),
         "home_address": fake.street_address(), "email": f"{fake.user_name()}@example.com",
         "phone": fake.phone_number(), "hotel_name": f"{fake.last_name()} {rng.choice(['Inn', 'Suites', 'Hotel', 'Lodge'])}",
@@ -321,6 +321,17 @@ def make_slots(job: dict) -> Dict[str, str]:
         "trailhead": b.pick(city, "trailhead", rng)["name"],
         "park": b.pick(city, "park", rng)["name"],
     }
+    # Follow-up turns: tie the placeholders to what the assistant already knows, so the
+    # message and `known` can never name different places (pilot 2: 12 of 22 did).
+    k = job.get("known") if job.get("turn") == 1 else None
+    if k:
+        if k.get("origin"):
+            slots["landmark_2"] = k["origin"]
+        if k.get("destination"):
+            slots["landmark"] = k["destination"]
+        if k.get("stops"):
+            slots["park"] = k["stops"][0]["query"]
+    return slots
 
 
 PLACEHOLDER_NAMES = ("user_name", "friend_name", "home_address", "email", "phone", "hotel_name", "time", "date",
@@ -385,18 +396,54 @@ def _turn_block(job: dict) -> str:
     if job["turn"] == 0:
         return "This is the FIRST message of the conversation."
     k = job["known"] or {}
-    desc = "; ".join(f"{a}: {b}" for a, b in k.items() if b not in (None, [], ""))
+    parts = []
+    if k.get("origin"):
+        parts.append("start = {landmark_2}")
+    if k.get("destination"):
+        parts.append("destination = {landmark}")
+    if k.get("stops"):
+        parts.append("a planned stop = {park}")
+    for a, b in k.items():
+        if a in ("origin", "destination", "stops", "missing_field") or b in (None, [], "", False):
+            continue
+        parts.append(f"{a}: {b}")
     missing = [a for a in ("origin", "destination") if k.get(a) is None]
     extra = (f" The assistant is still missing the {', '.join(missing)}, and the new message must not supply it."
              if missing else "")
-    return (f"This is a FOLLOW-UP in an ongoing chat. What the assistant already understood: {desc}.{extra} "
+    return ("This is a FOLLOW-UP in an ongoing chat. What the assistant already understood: "
+            f"{'; '.join(parts)}. If you need to refer to those places use exactly those placeholders and never "
+            f"name a different start or destination.{extra} "
             "Write only the user's NEXT message; do not restate what is already known.")
+
+
+def _refusal_rule(job: dict) -> str:
+    """Refusal rows must contain a real cue for the reason (pilot 2: many carried none)."""
+    L = job["labels"]
+    if L["route_action"] != "refuse":
+        return "Keep the request realistic for a trip-planning app."
+    return "REFUSAL: " + REFUSAL_RULES.get(L["refusal_reason"], "make the reason for refusing unmistakable.")
+
+
+REFUSAL_RULES = {
+    "prompt_injection": "the message must contain a clear attempt to override or probe the assistant (pasted SYSTEM/ADMIN "
+                        "text, 'ignore your instructions', asking for its prompt or commands).",
+    "data_request": "the person must explicitly ask what data the app stores, or to see or delete data about a person.",
+    "unsafe_or_illegal": "the person must ask for something actually unsafe or illegal (entering a closed or private area, "
+                         "cutting through a closed trail, walking on a highway). A normal safety preference is NOT enough.",
+    "out_of_scope_b2b": "the message must clearly be about a BUSINESS use (deliveries, a fleet, drivers, customers, "
+                        "time windows, a tour business). A family or friends group is NOT business.",
+    "out_of_scope_mode": "the person must ASK to travel by public transit (subway, bus, train, streetcar). "
+                         "Saying they want to AVOID transit is not this.",
+    "booking_or_payment": "the person must ask the assistant to book, reserve, buy or pay for something.",
+    "live_parking_or_inventory": "the person must ask about live parking, charger, ticket or room availability.",
+}
 
 
 def build_messages(job: dict) -> List[dict]:
     system, user = load_prompt(PROMPT_VERSION)
     user = (user.replace("<<LABELS>>", fmt_labels(job["labels"]))
             .replace("<<LABEL_GUIDE>>", label_guide()).replace("<<OMIT_RULE>>", _omit_rule(job))
+            .replace("<<REFUSAL_RULE>>", _refusal_rule(job))
             .replace("<<USE_CASE>>", f"{job['use_case']}. {job['use_case_desc']}")
             .replace("<<PERSONA>>", spec.load_personas()[job["persona"]])
             .replace("<<DIFFICULTY>>", job["difficulty"])
@@ -527,6 +574,49 @@ def _lang_problem(text: str) -> Optional[str]:
     return None
 
 
+NEGATE_RE = re.compile(r"(without|avoid|avoiding|no|not|don'?t|dont|do not|never|rather not|instead of|skip)\W+(?:\w+\W+){0,5}$")
+_CUES = {
+    "out_of_scope_mode": None,                    # handled by transit_requested()
+    "live_parking_or_inventory": r"park|availab|vacan|spots?\b|in stock|inventory|chargers?|charging|sold out|tickets?|rooms?\b|seats?\b",
+    "data_request": r"data|stor(e|ed|es|age)|histor|\blogs?\b|records?\b|track|collect|delete|erase|privacy|personal info|retain|"
+                    r"other users|someone else|see all|list all|who can see|who has",
+    "out_of_scope_b2b": r"business|compan|fleet|deliver|drop-?offs?|\bvans?\b|drivers?\b|clients?|customers?|shipment|dispatch|"
+                        r"\bgig\b|employees|staff|commercial|time windows?|tour (company|operator|business)",
+    "unsafe_or_illegal": r"clos(ed|ure)|trespass|private|fence|restricted|illegal|cut(ting)? through|sneak|off-?limits|barrier|"
+                         r"\bgate|prohibit|not allowed|thin ice|cliff|drunk|speed|red light|highway|motorway|no entry|"
+                         r"wrong way|climb|ignore (the )?sign|permission",
+    "prompt_injection": r"ignore|forget|overrid|system|admin|developer|instruction|prompt|jailbreak|disregard|bypass|"
+                        r"safety filter|commands|rules|pretend|you are now|debug mode|reveal",
+    "booking_or_payment": r"book|reserv|\bpay|payment|purchase|\bbuy\b|ticket|charge my|credit card|checkout|\border\b",
+}
+
+
+def transit_requested(msg: str) -> bool:
+    """True if a transit word appears that is not simply being avoided ('without the subway')."""
+    low = msg.lower()
+    return any(not NEGATE_RE.search(low[max(0, m.start() - 40):m.start()]) for m in TRANSIT_RE.finditer(low))
+
+
+def refusal_cue_ok(reason: str, msg: str) -> bool:
+    if reason == "out_of_scope_mode":
+        return transit_requested(msg)
+    pat = _CUES.get(reason)
+    return True if pat is None else bool(re.search(pat, msg.lower()))
+
+
+LIVE_CUE_RE = re.compile(
+    r"\b(rn|right now|now|currently|at the moment|traffic|congest\w*|backed up|jammed|rush hour|road ?work|construction|"
+    r"closures?|closed|blocked|blocking|flooded|washed out|detour|accident|incident|disruption|"
+    r"open (now|today|late|tomorrow)|(is|are) [\w' ]{0,30} open|"
+    r"(by|before|until|no earlier than|not before|arrive (by|before)) (\d{1,2}([:.]\d{2})?\s?(am|pm)?|noon|midnight|half past \w+))\b")
+LIVE_ACTIONS = ("plan", "replan", "compare_modes", "lookup_only")      # other actions keep needs_live_data false
+
+
+def live_cue(msg: str) -> bool:
+    """Mechanical live-data cue (traffic, closures, 'right now', arrive-by times)."""
+    return bool(LIVE_CUE_RE.search(msg.lower()))
+
+
 def qc(rec: dict) -> List[str]:
     """Return reject reasons (empty list = pass). Order matches the handbook table."""
     if rec.get("parse_error"):
@@ -560,6 +650,14 @@ def qc(rec: dict) -> List[str]:
                   and v and v.lower() in low}
         if len(placed) >= 2:                     # both ends are named, so nothing is missing
             reasons.append("omitted_field_present")
+    if rec.get("generator") == "llm":
+        if L["route_action"] == "refuse" and not refusal_cue_ok(L["refusal_reason"], msg):
+            reasons.append("refusal_cue_missing")
+        if L["route_action"] == "clarify" and rec.get("turn") == 1:
+            role = {"origin": "landmark_2", "destination": "landmark", "stops": "park"}.get(L["clarify_field"])
+            v = (rec.get("slots") or {}).get(role or "", "")
+            if v and v.lower() in low and "omitted_field_present" not in reasons:
+                reasons.append("omitted_field_present")      # the follow-up supplied what was missing
     if n_words >= 6 and rec.get("generator") == "llm" and _lang_problem(msg):
         reasons.append("wrong_language")
     return reasons
@@ -602,30 +700,80 @@ def pick_relabel_model(gen_model: str, idx: int, models=spec.RELABEL_MODELS) -> 
     return ok[idx % len(ok)]
 
 
+def _relabel_once(rec: dict, model: str, client: LLMClient) -> dict:
+    system, user = load_prompt(RELABEL_PROMPT_VERSION)
+    known = rec.get("known")
+    kb = f"Earlier in the chat the assistant understood: {json.dumps(known)}\n\n" if known else ""
+    user = (user.replace("<<LABEL_GUIDE>>", label_guide()).replace("<<KNOWN_BLOCK>>", kb)
+            .replace("<<MESSAGE>>", rec["utterance"]))
+    res = client.chat(model, [{"role": "system", "content": system}, {"role": "user", "content": user}], 0.0, 1.0, 0)
+    if res["error"]:
+        return {"labels": None, "model": model, "error": res["error"], "cost_usd": res.get("cost_usd", 0.0)}
+    obj, err = extract_json(res["text"])
+    if err:
+        return {"labels": None, "model": model, "error": err, "cost_usd": res.get("cost_usd", 0.0)}
+    lab = {f: obj.get(f) for f in spec.LABEL_FIELDS}
+    if isinstance(lab["needs_live_data"], str):
+        lab["needs_live_data"] = lab["needs_live_data"].lower() == "true"
+    return {"labels": lab, "model": model, "error": None, "cost_usd": res["cost_usd"]}
+
+
+def majority_labels(votes: List[dict]) -> Dict[str, Any]:
+    """Per-field majority of the relabel votes; a tie goes to the first voter."""
+    out = {}
+    for f in spec.LABEL_FIELDS:
+        out[f] = Counter(v[f] for v in votes).most_common(1)[0][0]
+    return out
+
+
 def relabel(rec: dict, idx: int, client: LLMClient) -> dict:
-    """Label the message WITHOUT the target labels. Offline: noisy copy of the target."""
+    """Label the message WITHOUT the target labels.
+
+    Two-of-three vote: the first model labels it; only if it disagrees with the target do the
+    other two models vote too, and the per-field majority is compared with the target.
+    Offline: noisy copy of the target."""
     if client.offline:
         rng = random.Random(rec["seed"] + 7)
         lab = dict(rec["labels"])
         if rng.random() < 0.06:           # simulate annotator disagreement
             lab["route_action"] = rng.choice(spec.ROUTE_ACTIONS)
         return {"labels": lab, "model": "offline-mock", "error": None}
-    system, user = load_prompt(RELABEL_PROMPT_VERSION)
-    known = rec.get("known")
-    kb = f"Earlier in the chat the assistant understood: {json.dumps(known)}\n\n" if known else ""
-    user = (user.replace("<<LABEL_GUIDE>>", label_guide()).replace("<<KNOWN_BLOCK>>", kb)
-            .replace("<<MESSAGE>>", rec["utterance"]))
-    model = pick_relabel_model(rec["model"], idx)
-    res = client.chat(model, [{"role": "system", "content": system}, {"role": "user", "content": user}], 0.0, 1.0, 0)
-    if res["error"]:
-        return {"labels": None, "model": model, "error": res["error"]}
-    obj, err = extract_json(res["text"])
-    if err:
-        return {"labels": None, "model": model, "error": err}
-    lab = {f: obj.get(f) for f in spec.LABEL_FIELDS}
-    if isinstance(lab["needs_live_data"], str):
-        lab["needs_live_data"] = lab["needs_live_data"].lower() == "true"
-    return {"labels": lab, "model": model, "error": None, "cost_usd": res["cost_usd"]}
+    ok = [m for m in spec.RELABEL_MODELS if family(m) != family(rec["model"])] or list(spec.RELABEL_MODELS)
+    first = idx % len(ok)
+    order = ok[first:] + ok[:first]
+    results, votes, cost = [], [], 0.0
+    for m in order:
+        r = _relabel_once(rec, m, client)
+        results.append({"model": m, "labels": r["labels"], "error": r["error"]})
+        cost += r.get("cost_usd") or 0.0
+        if r["labels"]:
+            votes.append(r["labels"])
+            if len(votes) == 1 and not disagreeing_fields(rec["labels"], r["labels"]):
+                break                      # first voter agrees with the target: no need to pay for more
+    if not votes:
+        return {"labels": None, "model": order[0], "error": results[0]["error"], "votes": results, "cost_usd": cost}
+    return {"labels": majority_labels(votes), "model": order[0], "error": None, "votes": results, "cost_usd": cost}
+
+
+def apply_live_rule(r: dict) -> None:
+    """Set r['disagree'] after the vote, with a mechanical check on needs_live_data.
+
+    If the rule cue AND the relabel majority both contradict the generator's needs_live_data,
+    two independent signals beat one, so the label is corrected (original kept in labels_orig).
+    A rule cue against a False target with no majority support is flagged for review."""
+    lab = (r["relabel"] or {}).get("labels")
+    dis = disagreeing_fields(r["labels"], lab)
+    r["live_cue"] = live_cue(r["utterance"])
+    if r["labels"]["route_action"] in LIVE_ACTIONS and lab and "needs_live_data" in dis:
+        if lab["needs_live_data"] == r["live_cue"]:                  # rule + majority agree against the generator
+            r.setdefault("labels_orig", dict(r["labels"]))
+            r["labels"] = dict(r["labels"], needs_live_data=lab["needs_live_data"])
+            r["autofix"] = ["needs_live_data"]
+            dis = [f for f in dis if f != "needs_live_data"]
+    elif (r["labels"]["route_action"] in LIVE_ACTIONS and lab and r["live_cue"]
+          and not r["labels"]["needs_live_data"] and "needs_live_data" not in dis):
+        dis.append("needs_live_data")                                # cue present but both say False: look again
+    r["disagree"] = dis
 
 
 def disagreeing_fields(target: dict, other: Optional[dict]) -> List[str]:
@@ -781,7 +929,7 @@ def stage_generate(cfg: Cfg, client: LLMClient, verbose: bool = True) -> dict:
     kept, rejected = run_qc(raw)
     for i, r in enumerate(kept):
         r["relabel"] = relabel(r, i, client)
-        r["disagree"] = disagreeing_fields(r["labels"], r["relabel"]["labels"])
+        apply_live_rule(r)
     cand = [r for r in kept]
     flagged = [r for r in cand if r["disagree"]]
     reasons = Counter(x for r in rejected for x in r["qc_reasons"])
