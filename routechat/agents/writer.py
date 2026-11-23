@@ -13,6 +13,7 @@ see the raw user text, and this module has no tools.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,9 +28,11 @@ from routechat.agents.templates import (
     too_many_stops_text,
 )
 from routechat.config import get_settings
+from routechat.logging import stage_line, token_cost
 from routechat.schemas import ReplyDraft
 
 _PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "writer_v1.md"
+PROMPT_VERSION = _PROMPT_PATH.stem
 _EARLY_GUARD = frozenset({"clarify", "refuse", "fixed_reply"})
 _EARLY_ACTIONS = frozenset({"refuse", "escalate", "clarify"})
 
@@ -258,25 +261,61 @@ def _live_model() -> Any:
 
     settings = get_settings().writer
     chat = ChatOpenAI(model=settings.model, temperature=settings.temperature)
-    return chat.with_structured_output(ReplyDraft)
+    # include_raw keeps the raw message, so token usage reaches the log.
+    return chat.with_structured_output(ReplyDraft, include_raw=True)
 
 
 def _as_draft(result: Any) -> ReplyDraft:
     if isinstance(result, ReplyDraft):
         return result
+    if isinstance(result, dict) and "parsed" in result and "raw" in result:
+        if result["parsed"] is None:
+            raise ValueError("the writer model returned no valid ReplyDraft")
+        return _as_draft(result["parsed"])
     return ReplyDraft.model_validate(result)
+
+
+def _usage(result: Any) -> tuple[int, int]:
+    """Input and output tokens from an include_raw result; (0, 0) when the call reports none."""
+    raw = result.get("raw") if isinstance(result, dict) else None
+    meta = getattr(raw, "usage_metadata", None) or {}
+    return int(meta.get("input_tokens", 0) or 0), int(meta.get("output_tokens", 0) or 0)
+
+
+def _write(state: dict[str, Any], llm: Any = None) -> tuple[ReplyDraft, tuple[int, int]]:
+    message = template_message(state)
+    if message is not None:
+        return ReplyDraft(message=message, mentioned_ids=[], kind="template"), (0, 0)
+    facts = build_facts(state)
+    model = llm if llm is not None else _live_model()
+    result = model.invoke(_messages(facts))
+    return _as_draft(result), _usage(result)
 
 
 def write_reply(state: dict[str, Any], llm: Any = None) -> ReplyDraft:
     """Return the ReplyDraft. Pass llm to avoid the live model in tests."""
-    message = template_message(state)
-    if message is not None:
-        return ReplyDraft(message=message, mentioned_ids=[], kind="template")
-    facts = build_facts(state)
-    model = llm if llm is not None else _live_model()
-    return _as_draft(model.invoke(_messages(facts)))
+    return _write(state, llm)[0]
 
 
 def write_node(state: dict[str, Any], llm: Any = None) -> dict[str, ReplyDraft]:
-    """LangGraph node. Returns only the draft field. llm is for tests."""
-    return {"draft": write_reply(state, llm)}
+    """LangGraph node. Returns only the draft field. llm is for tests.
+
+    Logs one stage line. The model, prompt version, tokens and cost appear
+    only when the model wrote the reply; a template costs nothing.
+    """
+    started = time.perf_counter()
+    draft, (tokens_in, tokens_out) = _write(state, llm)
+    model = get_settings().writer.model if draft.kind == "llm" else None
+    stage_line(
+        "write",
+        str(state.get("request_id", "")),
+        draft.kind,
+        (time.perf_counter() - started) * 1000,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        cost_usd=token_cost(model, tokens_in, tokens_out),
+        api_calls={"openai": 1} if draft.kind == "llm" and llm is None else {},
+        model=model,
+        prompt_version=PROMPT_VERSION if model else None,
+    )
+    return {"draft": draft}

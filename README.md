@@ -2,7 +2,7 @@
 
 Conversational route planner for MMAI 894. A request passes through seven stages. LangGraph runs them in order and chooses every branch in Python. Only the classifier, the constraint extractor, and the reply writer call a model.
 
-This repository currently contains WP0 (the shared contracts, the configuration, and the orchestrator), WP1 (the input guard), WP6 (the response writer), and WP10/WP11 (evaluation, the cost model, and the operating policy). The other stage packages plug in beside them as they are merged.
+This repository currently contains WP0 (the shared contracts, the configuration, and the orchestrator), WP1 (the input guard), WP6 (the response writer), WP7 (the output guard, the log, and the app), and WP10/WP11 (evaluation, the cost model, and the operating policy). The other stage packages plug in beside them as they are merged.
 
 ## Install
 
@@ -20,13 +20,13 @@ Copy `.env.example` to `.env` and fill in the keys locally. `.env` is never comm
 
 ## Run
 
-WP7 owns the Streamlit app. Once that package is merged, the app command is:
+The app is the WP7 screen. Until the other stages are merged it runs the handbook example for every request:
 
 ```bash
 uv run streamlit run routechat/app.py
 ```
 
-Until then, the orchestrator runs the week-1 stub end to end on the handbook's running example:
+The same stub trip can be printed without the screen:
 
 ```bash
 STUBS=1 uv run python -m routechat
@@ -60,14 +60,18 @@ routechat/config.py      typed access to config.yaml
 routechat/schemas.py     shared contracts, schemas v1
 routechat/graph.py       stage order and every branch
 routechat/stubs.py       running-example output for STUBS=1
-routechat/guards/        WP1 input guard
+routechat/guards/        WP1 input guard and WP7 output guard
 routechat/agents/writer.py WP6 reply, template or one model call
+routechat/logging.py     WP7 masked JSON log
+routechat/app.py         WP7 Streamlit screen
 prompts/writer_v1.md     WP6 prompt
 prompts/CHANGELOG.md     prompt changes
 prompts/judge_v1.md      WP10 judge prompt
 tests/test_graph.py      T-0-01 to T-0-05
 tests/test_input_guard.py T-1-01 to T-1-10
 tests/test_writer.py     T-6-01 to T-6-04
+tests/test_output_guard.py T-7-01 to T-7-07
+tests/test_app.py        T-7-08
 eval/                    WP10 metrics and run_eval; WP11 cost model
 policy/                  operating policy v1
 report/                  status quo study template
