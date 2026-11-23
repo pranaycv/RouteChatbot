@@ -48,8 +48,9 @@ bash eval/final_run.sh                             # the final run, once every s
 - **A reply the judge didn't grade is not clean.** It counts against trip success, so a judge failure can't make results look better.
 - **One grader is enough to run the judge check.** With a second grader we also report person vs
   person; with one, that column is NaN and the report says the judge was checked against one person.
-- **Hike and transit follow P-09.** When the gold mode is hike or transit and the system stops with
-  "not covered yet", the outcome counts as right. The results keep a `not_covered_p09` column so these
+- **Hike and transit follow P-09.** Transit is refused by the classifier (`out_of_scope_mode`, in the
+  schema since Nov 23), so D1 and D2 score it as a refuse. When the gold mode is hike and the map tools
+  stop it with "not covered yet", the outcome counts as right. The results keep a `not_covered_p09` column so these
   are reported on their own.
 - **Only inspected routes use a person's answer.** Trip success uses the reviewer's answer for the 50
   inspected routes; other accepted routes keep the verifier's statuses and are marked `verifier_only`.
@@ -70,18 +71,13 @@ bash eval/final_run.sh                             # the final run, once every s
 - Cost assumptions filled from the Nov 14 proposal (no objections). Training cost is 0: about 45 min on
   Kaggle's free GPU (WP9). Classifier hosting assumes CPU [WP9 to confirm].
 
-- Until WP7's file logger lands, `run_eval` writes the run log itself: it copies the JSON stage lines
-  the stages already log (`routechat.llm.log_stage`, `graph._log_failure`) into `logs/<run_id>.jsonl` and
-  adds one request line per request, built from the final TripState. Set `EVAL_WRITE_REQUEST_LINES=0`
-  once WP7 writes its own. Checked on Nov 19 with WP2's classifier and WP3's extractor (replayed calls)
-  plus the stubs for the other stages.
+- The run log comes from WP7's logger (`routechat/logging.py`, merged Nov 23). `run_eval` points it at
+  `logs/<run_id>.jsonl` with `ROUTECHAT_LOG`, so each evaluation run has its own file; the classifier step
+  writes one file per backend. The runner no longer writes log lines itself.
 
 ## Checked on Nov 22 against the other branches
 
 - Merging `main` into this branch has no conflicts; none of the files here are touched by `main`.
-- WP7 (PR #8) writes its own stage and request lines to `logs/events.jsonl`. `run_eval` keeps writing
-  its own run log by default. With `EVAL_WRITE_REQUEST_LINES=0` it points WP7's logger at this run's
-  file (`ROUTECHAT_LOG`) and writes nothing itself. Both ways were run on 120 requests.
 - WP8's file names and fields match what `run_eval` reads (`data/d1/test.jsonl`,
   `eval/datasets/d2_end_to_end.jsonl`, `eval/datasets/d3_adversarial.jsonl`; `item_id`, `utterance`,
   `gold_constraints`, `expected_outcome`). Checked with the generator's offline mock data only.
@@ -90,8 +86,6 @@ bash eval/final_run.sh                             # the final run, once every s
 
 ## Still to agree
 
-- WP5 and WP11: the rule for when a sponsored card may show (see `policy/operating_policy.md`, open points).
-- WP4 and WP6: a test id for P-09 (hiking and transit stopped by the map tools and the writer template).
 - Error rates for the cost of errors come from the final eval run; until then error cost and totals show NaN.
 
 ## Prompt template for AI coding tools

@@ -17,15 +17,13 @@ import json
 import os
 import subprocess
 import time
-import logging
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
 from eval import metrics
-from eval.log_schema import outcome_from_state, validate_line
+from eval.log_schema import validate_line
 
 RESULTS = Path("eval/results")
 DATASETS = Path("eval/datasets")      # D2, D3, D5 from WP8
@@ -70,121 +68,25 @@ def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, lis
     os.environ["RUN_ID"] = run_id; os.environ["EVAL_DATASET"] = dataset
     log_path = Path("logs") / f"{run_id}.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    # EVAL_WRITE_REQUEST_LINES=0 hands the run log over to WP7's logger (routechat/logging.py): it writes
-    # the stage lines and its own request line straight into this run's file, and the runner writes nothing.
-    use_wp7 = os.environ.get("EVAL_WRITE_REQUEST_LINES", "1") == "0"
-    if use_wp7:
-        os.environ["ROUTECHAT_LOG"] = str(log_path)
-    capture = None if use_wp7 else StageLineCapture(log_path)
+    # WP7's logger (routechat/logging.py) writes the stage lines and one request line per request.
+    # Pointing ROUTECHAT_LOG at this run's file keeps each evaluation run in its own log.
+    os.environ["ROUTECHAT_LOG"] = str(log_path)
     predicted = []
-    try:
-        for r in records:
-            os.environ["EVAL_ITEM_ID"] = r["item_id"]
-            request_id = f"{dataset}_{r['item_id']}"
-            if capture:
-                capture.start(request_id)
-            t0 = time.perf_counter()
-            state = invoke({"request_id": request_id, "utterance": r["utterance"],
-                            "turn_index": _or(r.get("turn_index"), 0), "known": _or(r.get("known"), None),
-                            "clarify_count": _or(r.get("clarify_count"), 0), "revision_count": 0})
-            wall_ms = (time.perf_counter() - t0) * 1000
-            if capture:
-                capture.write(request_line(r, state, dataset, run_id, request_id, capture.lines, wall_ms))
-            con = _plain(state.get("constraints"))
-            predicted.append({"item_id": r["item_id"], "constraints": con,
-                              "judge_input": judge_input(r, state)})
-    finally:
-        if capture:
-            capture.close()
+    for r in records:
+        os.environ["EVAL_ITEM_ID"] = r["item_id"]
+        request_id = f"{dataset}_{r['item_id']}"
+        state = invoke({"request_id": request_id, "utterance": r["utterance"],
+                        "turn_index": _or(r.get("turn_index"), 0), "known": _or(r.get("known"), None),
+                        "clarify_count": _or(r.get("clarify_count"), 0), "revision_count": 0})
+        con = _plain(state.get("constraints"))
+        predicted.append({"item_id": r["item_id"], "constraints": con,
+                          "judge_input": judge_input(r, state)})
     return log_path, predicted
-
-
-class StageLineCapture(logging.Handler):
-    """Copies the JSON stage lines the stages already log (routechat.llm.log_stage, graph._log_failure)
-    into logs/<run_id>.jsonl for this evaluation run. Only this package's runner attaches it, so the
-    app's own logging is unchanged. When WP7's file logger lands, set EVAL_WRITE_REQUEST_LINES=0 and
-    point --logs at its file instead."""
-
-    def __init__(self, path: Path):
-        super().__init__(level=logging.INFO)
-        self.f = open(path, "a", encoding="utf-8")
-        self.lines: list[dict] = []
-        self.root = logging.getLogger("routechat")
-        self.old_level = self.root.level
-        self.root.addHandler(self)
-        self.root.setLevel(logging.INFO)
-
-    def start(self, request_id: str):
-        self.request_id, self.lines = request_id, []
-
-    def emit(self, record):
-        try:
-            line = json.loads(record.getMessage())
-        except (ValueError, TypeError):
-            return  # not a stage line
-        if isinstance(line, dict) and "stage" in line:
-            line.setdefault("ts", datetime.now(timezone.utc).isoformat())
-            self.lines.append(line)
-            self.write(line)
-
-    def write(self, line: dict):
-        self.f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n"); self.f.flush()
-
-    def close(self):
-        self.root.removeHandler(self); self.root.setLevel(self.old_level); self.f.close()
-        super().close()
-
-
-def _deep_plain(state: dict) -> dict:
-    """Final TripState with every Pydantic model turned into plain dicts and lists."""
-    return {k: (v.model_dump(mode="json") if hasattr(v, "model_dump") else
-                [x.model_dump(mode="json") if hasattr(x, "model_dump") else x for x in v] if isinstance(v, list) else v)
-            for k, v in state.items()}
-
-
-def _stopped_at(st: dict) -> str:
-    """First stage that left the normal path, following the WP0 routing table."""
-    if (st.get("guard") or {}).get("decision") not in (None, "allow"):
-        return "guard_in"
-    if (st.get("classification") or {}).get("route_action") in ("refuse", "escalate", "clarify"):
-        return "classify"
-    con = st.get("constraints") or {}
-    if con.get("missing_field") or con.get("too_many_stops"):
-        return "extract"
-    if (st.get("report") or {}).get("decision") == "handoff":
-        return "verify"
-    return ""
 
 
 def _or(value, default):
     """Dataset rows come through pandas, where a missing field is NaN. Treat that as missing."""
     return default if value is None or (isinstance(value, float) and value != value) else value
-
-
-def request_line(record: dict, state: dict, dataset: str, run_id: str, request_id: str, stage_lines: list[dict],
-                 wall_ms: float | None = None) -> dict:
-    """The per-request summary line (Evaluation Spec, Table 3), built from the final TripState.
-    Written by the evaluation runner until WP7's logger writes its own. Holds no message text."""
-    st = _deep_plain(state)
-    cls, rep = st.get("classification") or {}, st.get("report") or {}
-    draft, final, ticket = st.get("draft") or {}, st.get("final") or {}, st.get("handoff") or {}
-    return {
-        "request_id": request_id, "stage": "request", "run_id": run_id, "git_commit": git_commit(),
-        "dataset": dataset, "item_id": record["item_id"], "turn_index": int(_or(record.get("turn_index"), 0)),
-        "outcome": outcome_from_state(st), "route_action": cls.get("route_action", ""),
-        "primary_mode": cls.get("primary_mode", ""), "revision_count": int(st.get("revision_count", 0)),
-        "checks": [{"id": c.get("id"), "status": c.get("status"), "hard": c.get("hard")} for c in rep.get("checks", [])],
-        "must_mention": rep.get("must_mention", []), "mentioned_ids": draft.get("mentioned_ids", []),
-        "used_fallback_template": bool(final.get("used_fallback_template", False)),
-        "approved": bool(final.get("approved", False)), "sponsored_shown": bool(rep.get("sponsored")),
-        "handoff_reason": ticket.get("reason") or rep.get("handoff_reason") or "",
-        "stopped_at": next((l["stage"] for l in stage_lines if l.get("decision") in ("system_error", "timeout")),
-                           _stopped_at(st)),
-        # wall clock around graph.invoke when the runner has it; the sum of stage latencies misses the graph's own time
-        "latency_ms_total": float(wall_ms if wall_ms is not None else sum(l.get("latency_ms", 0) or 0 for l in stage_lines)),
-        "cost_usd_total": float(sum(l.get("cost_usd", 0) or 0 for l in stage_lines)),
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
 
 
 def _plain(x):
@@ -243,11 +145,13 @@ def step_classifier(run_id: str):
     rows = []
     os.environ["RUN_ID"] = run_id
     Path("logs").mkdir(exist_ok=True)
-    capture = StageLineCapture(Path("logs") / f"{run_id}_classifier.jsonl")  # WP2's stage lines carry tokens and cost
+    from routechat.logging import install_stage_log  # WP7: copies WP2's JSON stage lines (tokens, cost) to the log file
+    install_stage_log()
     # Backend names follow .env.example (WP0): ft, base, prompted_small, prompted_large.
     for backend in os.environ.get("CLASSIFIER_BACKENDS", "ft,base,prompted_small,prompted_large").split(","):
         os.environ["CLASSIFIER_BACKEND"] = backend
-        capture.start(backend)
+        log = Path("logs") / f"{run_id}_classifier_{backend}.jsonl"   # one file per backend, for its own cost
+        os.environ["ROUTECHAT_LOG"] = str(log)
         preds = []
         for r in gold.to_dict("records"):
             t0 = time.perf_counter()
@@ -263,13 +167,13 @@ def step_classifier(run_id: str):
             preds.append({"item_id": r["item_id"], **out, "json_ok": ok, "latency_ms": (time.perf_counter() - t0) * 1000})
         p = pd.DataFrame(preds)
         m = metrics.classifier_metrics(p, gold)
-        cost = sum(l.get("cost_usd", 0) or 0 for l in capture.lines)
+        lines = [l for l in read_jsonl(log) if l.get("stage") == "classify"] if log.exists() else []
+        cost = sum(l.get("cost_usd", 0) or 0 for l in lines)
         m.update(backend=backend, p50_ms=p.latency_ms.quantile(.5), p95_ms=p.latency_ms.quantile(.95),
                  cost_per_1000_calls_usd=1000 * cost / len(p) if len(p) else float("nan"),
-                 tokens_in_per_call=sum(l.get("tokens_in", 0) for l in capture.lines) / max(len(p), 1),
-                 tokens_out_per_call=sum(l.get("tokens_out", 0) for l in capture.lines) / max(len(p), 1))
+                 tokens_in_per_call=sum(l.get("tokens_in", 0) for l in lines) / max(len(p), 1),
+                 tokens_out_per_call=sum(l.get("tokens_out", 0) for l in lines) / max(len(p), 1))
         rows.append(m)
-    capture.close()
     save(pd.DataFrame(rows), "classifier.csv", run_id)
 
 
