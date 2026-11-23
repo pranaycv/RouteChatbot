@@ -1,6 +1,7 @@
 """WP0 graph tests: T-0-01 through T-0-05."""
 
 import logging
+import subprocess
 import time
 from pathlib import Path
 
@@ -202,14 +203,27 @@ def test_timeout_in_a_revise_loop_stops_before_maps():
     assert state["handoff"].reason == "timeout"
 
 
+def _repository_files() -> list[Path]:
+    """Files git tracks or would add. A git-ignored file, such as .env, cannot be committed by accident.
+
+    A tracked file is listed even if it also matches .gitignore.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+    ).stdout.decode("utf-8")
+    paths = [ROOT / name for name in listed.split("\0") if name]
+    assert paths, "git listed no files"
+    return [path for path in paths if path.is_file()]
+
+
 def test_t_0_05_repository_has_no_key_material():
     # Built by concatenation so this test file does not itself contain the markers it scans for.
     markers = ("s" + "k-", "p" + "k" + ".")
-    skip_dirs = {".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
     offenders: list[str] = []
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or skip_dirs.intersection(path.parts):
-            continue
+    for path in _repository_files():
         if path.name == ".env.example":
             continue
         text = path.read_bytes().decode("utf-8", errors="ignore")

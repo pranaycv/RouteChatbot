@@ -36,6 +36,13 @@ UNSAFE_OR_ILLEGAL = "I can’t help with that request."
 TRANSIT_NOT_SUPPORTED = (
     "Transit directions aren’t available yet. I can plan walking, running, cycling or driving."
 )
+HIKE_NOT_SUPPORTED = (
+    "Hiking routes aren’t covered yet. I can plan walking, running, cycling or driving."
+)
+CHOOSE_MODE = "How would you like to travel: walking, running, cycling or driving?"
+MODE_NOT_SUPPORTED = (
+    "I can’t plan that way of travelling yet. I can plan walking, running, cycling or driving."
+)
 SYSTEM_ERROR_TEXT = "I couldn’t reach the map service just now. Please try again in a minute."
 NO_ROUTE = "I couldn’t find a route between those places. Could you try a different start or end?"
 
@@ -66,11 +73,13 @@ CLARIFY_TEMPLATES: dict[str, str] = {
     "none": UNPARSEABLE,
 }
 
-# Codes the map tools and the graph can put on a handoff. hike has no code yet.
+# Codes the map tools and the graph can put on a handoff. The map tools use
+# mode_not_supported for hike, a missing mode, and an unrouted combination.
 ERROR_REASONS: tuple[str, ...] = (
     "place_not_found",
     "no_route",
     "transit_not_supported",
+    "mode_not_supported",
     "tool_timeout",
     "system_error",
     "timeout",
@@ -79,10 +88,22 @@ ERROR_REASONS: tuple[str, ...] = (
 ERROR_TEMPLATES: dict[str, str] = {
     "no_route": NO_ROUTE,
     "transit_not_supported": TRANSIT_NOT_SUPPORTED,
+    "mode_not_supported": MODE_NOT_SUPPORTED,
     "tool_timeout": SYSTEM_ERROR_TEXT,
     "system_error": SYSTEM_ERROR_TEXT,
     "timeout": SYSTEM_ERROR_TEXT,
 }
+
+
+MODE_TEMPLATES: dict[str, str] = {
+    "hike": HIKE_NOT_SUPPORTED,
+    "unspecified": CHOOSE_MODE,
+}
+
+
+def mode_not_supported_text(mode: str | None) -> str:
+    """The sentence for the mode the map tools turned away."""
+    return MODE_TEMPLATES.get(mode, MODE_NOT_SUPPORTED)
 
 
 def too_many_stops_text(limit: int) -> str:
