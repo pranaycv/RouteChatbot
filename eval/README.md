@@ -12,15 +12,23 @@ This branch only adds new files. It does not change any file owned by another pa
 | `eval/run_eval.py` | The single command named in the root README. Steps that need other packages print "waiting for ..." until that code is merged. |
 | `eval/cost_model.py` | WP11 Part C cost model. Unit prices come from `config.yaml` `prices:` through `routechat.config`; nothing is copied. |
 | `eval/cost_assumptions.yaml` | Business assumptions only: volumes, EUR to USD, fixed and error costs, revenue. No prices. |
+| `eval/judge.py` | Runs the LLM judge on every D2 reply and compares it with two people's grades (Cohen's kappa). |
 | `prompts/judge_v1.md` | LLM judge prompt with the four WP10 yes/no questions. |
 | `policy/operating_policy.md` | Operating policy v1, P-01 to P-09. |
 | `report/status_quo_study.csv`, `report/status_quo_study_instructions.md` | Template and instructions for the manual baseline (WP11 Part B). |
-| `tests/test_eval.py` | T-10-01 to T-10-09 and T-11-01 to T-11-03, offline. |
+| `report/judge_grading_template.csv`, `report/judge_grading_instructions.md` | Sheet and instructions for grading 50 replies by hand to check the judge. |
+| `eval/route_review.py`, `report/route_review_instructions.md` | Sheet for the 50 manual route inspections, then the false-met rate and `d2_truth.csv` for trip success. |
+| `eval/final_run.sh` | The final run in order: tests, all eval steps with the judge, then the cost model. |
+| `tests/test_eval.py` | T-10-01 to T-10-16 and T-11-01 to T-11-06, offline. |
 
 ```bash
 FIXTURES=replay uv run pytest                     # all tests, WP0's and these
 FIXTURES=replay uv run python -m eval.run_eval --all
 uv run python -m eval.cost_model --logs logs/<run_id>.jsonl --success eval/results/end_to_end.csv
+RUN_JUDGE=1 uv run python -m eval.run_eval --e2e   # D2 run with the LLM judge (needs an API key)
+uv run python -m eval.judge --agreement report/judge_grading_A.csv report/judge_grading_B.csv
+uv run python -m eval.judge --agreement report/judge_grading_A.csv   # one grader only
+bash eval/final_run.sh                             # the final run, once every stage is merged
 ```
 
 ## Decisions, and why
@@ -37,16 +45,54 @@ uv run python -m eval.cost_model --logs logs/<run_id>.jsonl --success eval/resul
 - **Second clarify = handoff.** The graph rewrites it to `escalate` and creates no ticket, so the outcome
   reads `route_action`, not the ticket.
 - **`revision_count` can be 0, 1 or 2.** A second revise is counted but does not loop.
+- **A reply the judge didn't grade is not clean.** It counts against trip success, so a judge failure can't make results look better.
+- **One grader is enough to run the judge check.** With a second grader we also report person vs
+  person; with one, that column is NaN and the report says the judge was checked against one person.
+- **Hike and transit follow P-09.** When the gold mode is hike or transit and the system stops with
+  "not covered yet", the outcome counts as right. The results keep a `not_covered_p09` column so these
+  are reported on their own.
+- **Only inspected routes use a person's answer.** Trip success uses the reviewer's answer for the 50
+  inspected routes; other accepted routes keep the verifier's statuses and are marked `verifier_only`.
+- **An API with no price is never free.** If the log has an API name that `cost_assumptions.yaml` does
+  not price, the Mapbox cost is NaN and the name is printed. WP4 logs `geocode`, `searchbox`,
+  `directions` and `graphhopper`; all four are covered.
 - **Null stays NaN.** An assumption nobody has set shows up as NaN and in `missing_inputs`, never as 0.
 - **`error_type`, not `error`.** The optional error field uses the name `graph._log_failure` already writes.
 
+## Agreed on Nov 12
+
+- WP7: every log line carries `ts` (Pranay: the logger can add it automatically).
+- Evaluation runs are tagged with RUN_ID, EVAL_DATASET and EVAL_ITEM_ID. The item id is the id that
+  the synthetic data already has [field name to confirm when D2 lands].
+- Status quo: the main number is minutes saved against planning by hand (map apps, blogs, checking
+  each requirement), not a comparison with Google Maps. A dollar value of time is optional.
+
+- Cost assumptions filled from the Nov 14 proposal (no objections). Training cost is 0: about 45 min on
+  Kaggle's free GPU (WP9). Classifier hosting assumes CPU [WP9 to confirm].
+
+- Until WP7's file logger lands, `run_eval` writes the run log itself: it copies the JSON stage lines
+  the stages already log (`routechat.llm.log_stage`, `graph._log_failure`) into `logs/<run_id>.jsonl` and
+  adds one request line per request, built from the final TripState. Set `EVAL_WRITE_REQUEST_LINES=0`
+  once WP7 writes its own. Checked on Nov 19 with WP2's classifier and WP3's extractor (replayed calls)
+  plus the stubs for the other stages.
+
+## Checked on Nov 22 against the other branches
+
+- Merging `main` into this branch has no conflicts; none of the files here are touched by `main`.
+- WP7 (PR #8) writes its own stage and request lines to `logs/events.jsonl`. `run_eval` keeps writing
+  its own run log by default. With `EVAL_WRITE_REQUEST_LINES=0` it points WP7's logger at this run's
+  file (`ROUTECHAT_LOG`) and writes nothing itself. Both ways were run on 120 requests.
+- WP8's file names and fields match what `run_eval` reads (`data/d1/test.jsonl`,
+  `eval/datasets/d2_end_to_end.jsonl`, `eval/datasets/d3_adversarial.jsonl`; `item_id`, `utterance`,
+  `gold_constraints`, `expected_outcome`). Checked with the generator's offline mock data only.
+- The final run cannot use `FIXTURES=replay`: new requests have no recorded replies, and a replayed
+  run logs no map API calls, so map cost would show as 0. `eval/final_run.sh` uses `record`.
+
 ## Still to agree
 
-- WP7: whether stage lines carry `ts` (the graph's failure line does not yet), and the names RUN_ID,
-  EVAL_DATASET and EVAL_ITEM_ID used to stamp evaluation runs.
-- WP8: file names for D1 test, D2 (with `gold_constraints`), D3 and the 50-reply judge sample under `eval/datasets/`.
+- WP5 and WP11: the rule for when a sponsored card may show (see `policy/operating_policy.md`, open points).
 - WP4 and WP6: a test id for P-09 (hiking and transit stopped by the map tools and the writer template).
-- Team: EUR to USD rate, value of time, sponsored card price and the cost per error type.
+- Error rates for the cost of errors come from the final eval run; until then error cost and totals show NaN.
 
 ## Prompt template for AI coding tools
 

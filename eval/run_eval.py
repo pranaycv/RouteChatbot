@@ -17,13 +17,15 @@ import json
 import os
 import subprocess
 import time
+import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
 from eval import metrics
-from eval.log_schema import validate_line
+from eval.log_schema import outcome_from_state, validate_line
 
 RESULTS = Path("eval/results")
 DATASETS = Path("eval/datasets")      # D2, D3, D5 from WP8
@@ -66,17 +68,153 @@ def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, lis
     """
     from routechat.graph import invoke  # WP0
     os.environ["RUN_ID"] = run_id; os.environ["EVAL_DATASET"] = dataset
+    log_path = Path("logs") / f"{run_id}.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # EVAL_WRITE_REQUEST_LINES=0 hands the run log over to WP7's logger (routechat/logging.py): it writes
+    # the stage lines and its own request line straight into this run's file, and the runner writes nothing.
+    use_wp7 = os.environ.get("EVAL_WRITE_REQUEST_LINES", "1") == "0"
+    if use_wp7:
+        os.environ["ROUTECHAT_LOG"] = str(log_path)
+    capture = None if use_wp7 else StageLineCapture(log_path)
     predicted = []
-    for r in records:
-        os.environ["EVAL_ITEM_ID"] = r["item_id"]
-        state = invoke({"request_id": f"{dataset}_{r['item_id']}", "utterance": r["utterance"],
-                        "turn_index": r.get("turn_index", 0), "known": r.get("known"),
-                        "clarify_count": 0, "revision_count": 0})
-        con = state.get("constraints")
-        if hasattr(con, "model_dump"):
-            con = con.model_dump()
-        predicted.append({"item_id": r["item_id"], "constraints": con})
-    return Path("logs") / f"{run_id}.jsonl", predicted
+    try:
+        for r in records:
+            os.environ["EVAL_ITEM_ID"] = r["item_id"]
+            request_id = f"{dataset}_{r['item_id']}"
+            if capture:
+                capture.start(request_id)
+            t0 = time.perf_counter()
+            state = invoke({"request_id": request_id, "utterance": r["utterance"],
+                            "turn_index": _or(r.get("turn_index"), 0), "known": _or(r.get("known"), None),
+                            "clarify_count": _or(r.get("clarify_count"), 0), "revision_count": 0})
+            wall_ms = (time.perf_counter() - t0) * 1000
+            if capture:
+                capture.write(request_line(r, state, dataset, run_id, request_id, capture.lines, wall_ms))
+            con = _plain(state.get("constraints"))
+            predicted.append({"item_id": r["item_id"], "constraints": con,
+                              "judge_input": judge_input(r, state)})
+    finally:
+        if capture:
+            capture.close()
+    return log_path, predicted
+
+
+class StageLineCapture(logging.Handler):
+    """Copies the JSON stage lines the stages already log (routechat.llm.log_stage, graph._log_failure)
+    into logs/<run_id>.jsonl for this evaluation run. Only this package's runner attaches it, so the
+    app's own logging is unchanged. When WP7's file logger lands, set EVAL_WRITE_REQUEST_LINES=0 and
+    point --logs at its file instead."""
+
+    def __init__(self, path: Path):
+        super().__init__(level=logging.INFO)
+        self.f = open(path, "a", encoding="utf-8")
+        self.lines: list[dict] = []
+        self.root = logging.getLogger("routechat")
+        self.old_level = self.root.level
+        self.root.addHandler(self)
+        self.root.setLevel(logging.INFO)
+
+    def start(self, request_id: str):
+        self.request_id, self.lines = request_id, []
+
+    def emit(self, record):
+        try:
+            line = json.loads(record.getMessage())
+        except (ValueError, TypeError):
+            return  # not a stage line
+        if isinstance(line, dict) and "stage" in line:
+            line.setdefault("ts", datetime.now(timezone.utc).isoformat())
+            self.lines.append(line)
+            self.write(line)
+
+    def write(self, line: dict):
+        self.f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n"); self.f.flush()
+
+    def close(self):
+        self.root.removeHandler(self); self.root.setLevel(self.old_level); self.f.close()
+        super().close()
+
+
+def _deep_plain(state: dict) -> dict:
+    """Final TripState with every Pydantic model turned into plain dicts and lists."""
+    return {k: (v.model_dump(mode="json") if hasattr(v, "model_dump") else
+                [x.model_dump(mode="json") if hasattr(x, "model_dump") else x for x in v] if isinstance(v, list) else v)
+            for k, v in state.items()}
+
+
+def _stopped_at(st: dict) -> str:
+    """First stage that left the normal path, following the WP0 routing table."""
+    if (st.get("guard") or {}).get("decision") not in (None, "allow"):
+        return "guard_in"
+    if (st.get("classification") or {}).get("route_action") in ("refuse", "escalate", "clarify"):
+        return "classify"
+    con = st.get("constraints") or {}
+    if con.get("missing_field") or con.get("too_many_stops"):
+        return "extract"
+    if (st.get("report") or {}).get("decision") == "handoff":
+        return "verify"
+    return ""
+
+
+def _or(value, default):
+    """Dataset rows come through pandas, where a missing field is NaN. Treat that as missing."""
+    return default if value is None or (isinstance(value, float) and value != value) else value
+
+
+def request_line(record: dict, state: dict, dataset: str, run_id: str, request_id: str, stage_lines: list[dict],
+                 wall_ms: float | None = None) -> dict:
+    """The per-request summary line (Evaluation Spec, Table 3), built from the final TripState.
+    Written by the evaluation runner until WP7's logger writes its own. Holds no message text."""
+    st = _deep_plain(state)
+    cls, rep = st.get("classification") or {}, st.get("report") or {}
+    draft, final, ticket = st.get("draft") or {}, st.get("final") or {}, st.get("handoff") or {}
+    return {
+        "request_id": request_id, "stage": "request", "run_id": run_id, "git_commit": git_commit(),
+        "dataset": dataset, "item_id": record["item_id"], "turn_index": int(_or(record.get("turn_index"), 0)),
+        "outcome": outcome_from_state(st), "route_action": cls.get("route_action", ""),
+        "primary_mode": cls.get("primary_mode", ""), "revision_count": int(st.get("revision_count", 0)),
+        "checks": [{"id": c.get("id"), "status": c.get("status"), "hard": c.get("hard")} for c in rep.get("checks", [])],
+        "must_mention": rep.get("must_mention", []), "mentioned_ids": draft.get("mentioned_ids", []),
+        "used_fallback_template": bool(final.get("used_fallback_template", False)),
+        "approved": bool(final.get("approved", False)), "sponsored_shown": bool(rep.get("sponsored")),
+        "handoff_reason": ticket.get("reason") or rep.get("handoff_reason") or "",
+        "stopped_at": next((l["stage"] for l in stage_lines if l.get("decision") in ("system_error", "timeout")),
+                           _stopped_at(st)),
+        # wall clock around graph.invoke when the runner has it; the sum of stage latencies misses the graph's own time
+        "latency_ms_total": float(wall_ms if wall_ms is not None else sum(l.get("latency_ms", 0) or 0 for l in stage_lines)),
+        "cost_usd_total": float(sum(l.get("cost_usd", 0) or 0 for l in stage_lines)),
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _plain(x):
+    """Pydantic model or dict -> plain dict (None stays None)."""
+    return x.model_dump() if hasattr(x, "model_dump") else x
+
+
+ROUTE_FACT_FIELDS = ("mode", "distance_m", "duration_s", "duration_traffic_s", "ascend_m", "stops_in_order",
+                     "highway_m", "toll_m", "ferry_m", "bike_network_share", "closures")
+
+
+def judge_input(record: dict, state: dict) -> dict:
+    """What the LLM judge sees for one reply (prompts/judge_v1.md): the request, the verifier's checks,
+    what had to be mentioned, the facts of the chosen route and the final text. Geometry is left out."""
+    report = _plain(state.get("report")) or {}
+    final = _plain(state.get("final")) or {}
+    chosen = report.get("chosen_route")
+    facts = [{k: c.get(k) for k in ROUTE_FACT_FIELDS}
+             for c in map(_plain, state.get("candidates") or []) if c and c.get("id") == chosen]
+    return {"item_id": record["item_id"], "utterance": record["utterance"],
+            "checks": report.get("checks", []), "must_mention": report.get("must_mention", []),
+            "route_facts": facts[0] if facts else None, "final_text": final.get("text", "")}
+
+
+def has_request_lines(req: pd.DataFrame, path: Path, step: str) -> bool:
+    """WP7 writes one request line per request; without them there is nothing to score yet."""
+    if req.empty or "item_id" not in req:
+        print(f"{step}: waiting for WP7 request lines in {path} (graph ran, but nothing was logged)")
+        return False
+    return True
 
 
 def load_logs(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -86,6 +224,8 @@ def load_logs(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     if bad:
         print(f"WARNING: {len(bad)} log lines do not match eval/log_schema.py, first: {bad[0]}")
     req = pd.DataFrame([l for l in lines if l.get("stage") == "request"])
+    if not req.empty:
+        req = req.drop_duplicates("request_id", keep="last")  # if WP7 and the runner both wrote one
     stg = pd.DataFrame([l for l in lines if l.get("stage") != "request"])
     return req, stg
 
@@ -101,22 +241,35 @@ def step_classifier(run_id: str):
     except ImportError:
         print("classifier: waiting for routechat.classifier.predict (WP2)"); return
     rows = []
+    os.environ["RUN_ID"] = run_id
+    Path("logs").mkdir(exist_ok=True)
+    capture = StageLineCapture(Path("logs") / f"{run_id}_classifier.jsonl")  # WP2's stage lines carry tokens and cost
     # Backend names follow .env.example (WP0): ft, base, prompted_small, prompted_large.
     for backend in os.environ.get("CLASSIFIER_BACKENDS", "ft,base,prompted_small,prompted_large").split(","):
         os.environ["CLASSIFIER_BACKEND"] = backend
+        capture.start(backend)
         preds = []
         for r in gold.to_dict("records"):
             t0 = time.perf_counter()
             try:
-                out = classify(UserTurn(utterance=r["utterance"], turn_index=r.get("turn_index", 0), known=r.get("known")))
-                out = out.model_dump() if hasattr(out, "model_dump") else dict(out); ok = True
+                out = classify(UserTurn(utterance=r["utterance"], turn_index=r.get("turn_index", 0), known=r.get("known")),
+                               request_id=f"D1_{r['item_id']}")
+                out = out.model_dump() if hasattr(out, "model_dump") else dict(out)
+                # WP2 never raises on bad model output: it retries once, then returns escalate with
+                # parse_error = True. That case is the JSON failure the metric counts.
+                ok = not out.get("parse_error", False)
             except Exception:
                 out, ok = {f: None for f in metrics.CLASSIFIER_FIELDS}, False
             preds.append({"item_id": r["item_id"], **out, "json_ok": ok, "latency_ms": (time.perf_counter() - t0) * 1000})
         p = pd.DataFrame(preds)
         m = metrics.classifier_metrics(p, gold)
-        m.update(backend=backend, p50_ms=p.latency_ms.quantile(.5), p95_ms=p.latency_ms.quantile(.95))
+        cost = sum(l.get("cost_usd", 0) or 0 for l in capture.lines)
+        m.update(backend=backend, p50_ms=p.latency_ms.quantile(.5), p95_ms=p.latency_ms.quantile(.95),
+                 cost_per_1000_calls_usd=1000 * cost / len(p) if len(p) else float("nan"),
+                 tokens_in_per_call=sum(l.get("tokens_in", 0) for l in capture.lines) / max(len(p), 1),
+                 tokens_out_per_call=sum(l.get("tokens_out", 0) for l in capture.lines) / max(len(p), 1))
         rows.append(m)
+    capture.close()
     save(pd.DataFrame(rows), "classifier.csv", run_id)
 
 
@@ -131,14 +284,28 @@ def step_end_to_end(run_id: str, logs_path: Path | None):
             logs_path, predicted = run_graph(gold.to_dict("records"), "D2", run_id)
         except ImportError:
             print("end_to_end: waiting for routechat.graph (WP0)"); return
+    if predicted:
+        RESULTS.mkdir(parents=True, exist_ok=True)
+        with open(RESULTS / "judge_inputs.jsonl", "w", encoding="utf-8") as f:
+            for p in predicted:
+                f.write(json.dumps(p["judge_input"], ensure_ascii=False, default=str) + "\n")
+        if os.environ.get("RUN_JUDGE") == "1":
+            from eval import judge as judge_mod
+            judge_mod.run_judge([p["judge_input"] for p in predicted], judge_mod.default_llm()) \
+                .to_csv(RESULTS / "judge_answers.csv", index=False)
     req, stg = load_logs(logs_path)
-    truth_p = DATASETS / "d2_truth.csv"   # manual route inspections [file name to agree]
+    if not has_request_lines(req, logs_path, "end_to_end"):
+        step_extractor(run_id, gold, predicted); return
+    truth_p = DATASETS / "d2_truth.csv"   # written by eval.route_review --score from the manual route inspections
     truth = pd.read_csv(truth_p) if truth_p.exists() else None
     judge_p = RESULTS / "judge_answers.csv"
     judge = pd.read_csv(judge_p) if judge_p.exists() else None
     ts = metrics.trip_success(req, gold, judge, truth)
     save(ts, "end_to_end.csv", run_id)
+    accepted = ts[ts["outcome"] == "accept"]
     summary = {"trip_success_rate": metrics.rate(ts["success"]),
+               "accepted": len(accepted), "accepted_checked_by_person": int((accepted["truth_source"] == "human").sum()),
+               "not_covered_p09": int(ts["not_covered_p09"].sum()),
                **metrics.handoff_precision_recall(req, gold),
                **metrics.cost_per_success(req, ts["success"])}
     save(pd.DataFrame([summary]), "end_to_end_summary.csv", run_id)
@@ -152,9 +319,12 @@ def step_extractor(run_id: str, gold: pd.DataFrame, predicted: list[dict] | None
     if not predicted or "gold_constraints" not in gold:
         print("extractor: needs a fresh D2 run and gold_constraints in D2 (WP8)"); return
     save(pd.DataFrame(predicted), "predicted_constraints.csv", run_id)
-    flat = lambda rows, key: pd.DataFrame([{"item_id": r["item_id"], **(r[key] or {})} for r in rows])
+    # Only requests that have a gold ConstraintSet and reached the extractor: a refused request has neither.
+    flat = lambda rows, key: pd.DataFrame([{"item_id": r["item_id"], **r[key]} for r in rows if isinstance(r.get(key), dict)])
     pred = flat(predicted, "constraints")
     gold_c = flat(gold.to_dict("records"), "gold_constraints")
+    if pred.empty or gold_c.empty:
+        print("extractor: no request reached the extractor in this run, nothing to compare"); return
     fields = [f for f in EXTRACTOR_FIELDS if f in gold_c and f in pred]
     save(metrics.extraction_field_accuracy(pred, gold_c, fields), "extractor.csv", run_id)
 
@@ -170,6 +340,8 @@ def step_adversarial(run_id: str, logs_path: Path | None):
         except ImportError:
             print("adversarial: waiting for routechat.graph (WP0)"); return
     req, _ = load_logs(logs_path)
+    if not has_request_lines(req, logs_path, "adversarial"):
+        return
     save(metrics.adversarial_pass_rate(req, gold), "adversarial.csv", run_id)
 
 
@@ -181,7 +353,8 @@ def main():
     ap.add_argument("--adversarial", action="store_true")
     ap.add_argument("--logs", type=Path, help="reuse an existing log file instead of running the graph")
     a = ap.parse_args()
-    run_id = f"eval_{time.strftime('%Y%m%d_%H%M')}_{uuid.uuid4().hex[:4]}"
+    # RUN_ID from the environment wins, so eval/final_run.sh can name the log files it passes on
+    run_id = os.environ.get("RUN_ID") or f"eval_{time.strftime('%Y%m%d_%H%M')}_{uuid.uuid4().hex[:4]}"
     print("run_id", run_id, "commit", git_commit())
     if a.all or a.classifier:
         step_classifier(run_id)
@@ -189,7 +362,7 @@ def main():
         step_end_to_end(run_id, a.logs)
     if a.all or a.adversarial:
         step_adversarial(run_id, a.logs)
-    # Judge, ablations, single-agent baseline and plots are added in weeks 2 and 3 (see WP10 plan).
+    # The LLM judge runs inside the D2 step when RUN_JUDGE=1, or on its own: python -m eval.judge
 
 
 if __name__ == "__main__":

@@ -19,3 +19,9 @@ Each rule names where it is enforced and how it is tested. Report appendix uses 
 
 ## Open points
 - Test id for P-09 (with WP4 and WP6).
+- P-05, when a sponsored card may show [proposed Nov 22, to agree with WP5]. The schema has no trip-purpose
+  field, so "leisure" is defined by what it is not, as in the WP5 work package: an accepted plan may show a
+  card unless it is an accessibility trip (required_accessibility or step_free), a safety trip (lit_streets,
+  or closures to check), a compare request, or evening travel. Evening means the user gave a time at or after
+  18:00 or before 06:00 (depart_at or arrive_by), or wrote evening, night or tonight. A request with no time
+  is not treated as evening, because most requests give none.

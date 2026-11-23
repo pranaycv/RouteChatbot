@@ -1,0 +1,35 @@
+[
+  {
+    "name": "accept",
+    "distance_km": 4.2,
+    "duration_min": 18,
+    "climb_m": 38,
+    "extra_m": [],
+    "must_mention": ["closures"],
+    "sponsored": false,
+    "message": "Here's a 4.2 km bike route, about 18 minutes, with 38 m of climbing. It stops at Canadian Tire on Yonge, avoids highways, and 72% of it is on bike lanes or paths. I couldn't check for closures, so watch for signs on the way.",
+    "mentioned_ids": ["closures"]
+  },
+  {
+    "name": "accept_two_warnings",
+    "distance_km": 4.2,
+    "duration_min": 18,
+    "climb_m": 38,
+    "extra_m": [180],
+    "must_mention": ["closures", "hours:dark_horse"],
+    "sponsored": true,
+    "message": "Here's a 4.2 km bike route, about 18 minutes, with 38 m of climbing. It stops at Canadian Tire on Yonge. I couldn't check for closures, and I couldn't confirm the opening hours. Sponsored: Dark Horse Espresso, 180 m from the route.",
+    "mentioned_ids": ["closures", "hours:dark_horse"]
+  },
+  {
+    "name": "handoff",
+    "distance_km": 4.2,
+    "duration_min": 18,
+    "climb_m": 38,
+    "extra_m": [],
+    "must_mention": ["step_free"],
+    "sponsored": false,
+    "message": "This needs a person, so I've passed your trip to our support team. Here's what I could check: the route is 4.2 km, about 18 minutes, with 38 m of climbing, and I couldn't confirm that it is step-free.",
+    "mentioned_ids": ["step_free"]
+  }
+]

@@ -13,3 +13,10 @@ Every prompt change gets an entry: what changed, why, and the metric before and 
 ## label_guide_v1.md
 
 - **2026-11-13, v1.** First version. Written from the handbook's WP2 label rules and the A1 controlled vocabularies, matched to schemas v1 (`routechat/schemas.py`) and operating policy P-09: hike and transit are labelled as themselves and are not refused; the map tools and the writer turn them away. Decisions the handbook left open, to confirm with WP8: both ends missing gives `clarify_field = origin`; `clarify_field = stops` only when a stop is requested but its kind is unknown; `primary_mode` and `needs_live_data` are still labelled on refuse, escalate and clarify turns; EV and car-share are `car`. No metric yet; the frozen D1 test set is not available.
+
+## writer_v1
+
+- What: first writer prompt. Fixed early-exit sentences stay in code. The model only describes an accepted route, or a handoff that still has a route.
+- Why: WP6. The wording follows policy P-03 (say what was not confirmed), P-04 (no booking or promise), P-05 (label a sponsor), and P-08 (a handoff says a person has the trip).
+- Metric before: none. This is the first version.
+- Metric after: not measured. Faithfulness and disclosure completeness wait for the WP10 judge.

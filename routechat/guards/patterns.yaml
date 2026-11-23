@@ -1,0 +1,43 @@
+# Owner: Person A (WP1 input guard), Team Rosedale, MMAI 894.
+# Attack patterns for the input guard. WP11 may extend these without a code change.
+# Reviewed against operating policy P-07 (never reveal instructions or other users' data) on 2026-11-21.
+#
+# Groups map to GuardReason values. First matching group wins (prompt_injection
+# before data_request). Patterns are case-insensitive and must require an
+# instruction/rule word for injection so "ignore the traffic" stays allowed.
+
+prompt_injection:
+  # "ignore / disregard / forget / override … instructions / rules", with or without
+  # "previous". Only small function words may sit in between, so "ignore the
+  # traffic" and "ignore the traffic rules" stay allowed.
+  - "(?:ignore|disregard|forget|override|bypass)\\s+(?:(?:all|any|of|your|the|these|those|my)\\s+){0,3}(?:(?:previous|prior|above|earlier|system|safety)\\s+)?(?:instructions?|rules?|prompts?|guidelines?)"
+  - "\\bnew\\s+instructions?\\s*:"
+  # system / developer prompt leaks and role overrides
+  - "system\\s+prompt"
+  - "developer\\s+mode"
+  # Only as a command at the start of a sentence; "from where you are now" is a trip.
+  - "(?:^|[.!?]\\s*)you\\s+are\\s+now\\b"
+  - "jailbreak"
+  - "(?:reveal|print|show)\\s+(?:me\\s+)?(?:your\\s+)?(?:system\\s+)?(?:instructions?|prompt|rules?)"
+  # "tell me rules of the road" is a trip question, so tell/repeat need "your".
+  - "(?:tell|repeat)\\s+(?:me\\s+)?your\\s+(?:system\\s+)?(?:instructions?|prompt|rules?)"
+  - "what\\s+are\\s+your\\s+(?:system\\s+)?(?:instructions|prompt|guidelines)"
+  - "repeat\\s+(?:the\\s+)?(?:text|words|everything)\\s+above"
+
+data_request:
+  # other users' trips, addresses, or history (P-07). "other users" alone is too
+  # broad ("a path busy with other users"), so it needs a data word or a question.
+  - "other\\s+users?(?:'s|s')?\\s+(?:trips?|routes?|address(?:es)?|data|search(?:es)?|history|locations?|requests?|messages?|destinations?)"
+  - "(?:what|where)\\s+(?:did|do|have)\\s+(?:the\\s+)?other\\s+(?:users?|people)"
+  - "another\\s+user(?:'s)?\\s+(?:trips?|routes?|address(?:es)?|data|search(?:es)?|history|locations?|destinations?)"
+  - "last\\s+user(?:'s|s)?"
+  - "previous\\s+(?:user|person)(?:'s|s)?"
+  - "(?:person|user|someone)\\s+(?:who\\s+was\\s+)?(?:here\\s+)?before\\s+me"
+  - "whoever\\s+(?:used|was\\s+using)\\s+this"
+  - "someone\\s+else(?:'s)?\\s+address"
+  - "search\\s+history"
+  - "other\\s+people(?:'s)?\\s+(?:address|trip|route|search)"
+  - "someone\\s+else(?:'s)?\\s+(?:trip|route|search|data)"
+  - "logs?\\s+of\\s+(?:other|recent|previous|past|all)\\s+(?:users|trips|searches|requests|people)"
+  - "print\\s+the\\s+last\\s+user"
+  - "show\\s+(?:me\\s+)?(?:the\\s+)?(?:last|previous)\\s+user"

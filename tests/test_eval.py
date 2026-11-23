@@ -13,7 +13,8 @@ import pandas as pd
 # to the path here instead of changing pyproject.toml (WP0's file).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from eval import cost_model, metrics  # noqa: E402
+from eval import cost_model, judge, metrics  # noqa: E402
+from eval.run_eval import judge_input  # noqa: E402
 from eval.log_schema import outcome_from_state, validate_line  # noqa: E402
 
 
@@ -59,9 +60,12 @@ def test_T_10_04_trip_success_needs_outcome_truth_and_judge():
                          request_line("c", "refuse"), request_line("d", "accept", met)])
     gold = pd.DataFrame({"item_id": list("abcd"), "expected_outcome": ["accept", "accept", "refuse", "clarify"]})
     truth = pd.DataFrame({"item_id": ["a", "b"], "hard_truly_met": [True, False]})
-    judge = pd.DataFrame({"item_id": ["a"], "question": ["unsupported_claim"], "answer": [False]})
+    judge = pd.DataFrame({"item_id": ["a", "c"], "question": ["unsupported_claim"] * 2, "answer": [False, False]})
     ts = metrics.trip_success(logs, gold, judge, truth)
     assert ts.set_index("item_id")["success"].to_dict() == {"a": True, "b": False, "c": True, "d": False}
+    # a reply the judge did not grade does not count as clean
+    ts = metrics.trip_success(logs, gold, judge[judge.item_id == "a"], truth)
+    assert not ts.set_index("item_id").loc["c", "success"]
 
 
 def test_T_10_05_policy_critical_errors():
@@ -84,6 +88,7 @@ def test_T_11_01_mapbox_prices_come_from_config():
     assert cost_model.tiered_cost(d.free_monthly, tiers) == 0
     # 1M calls: first 100k free, then 900k at config's $2.00 per 1,000
     assert math.isclose(cost_model.tiered_cost(1_000_000, tiers), 900 * d.then)
+    a["eur_to_usd"] = None                     # an unset assumption is reported, never read as 0
     assert "eur_to_usd" in cost_model.missing_inputs(a)
     # the assumptions file holds business inputs only, no prices
     assert not {"mapbox_volume_discounts", "graphhopper_more_plans", "prices"} & set(a)
@@ -103,7 +108,14 @@ def test_T_11_03_monthly_table_shape_and_breakeven():
                           stage_line(request_id="r2", stage="extract", api_calls={}, cost_usd=0.0009)])
     t = cost_model.monthly_table(cost_model.per_request_usage(stage), 0.8, {}, prices, a)
     assert list(t["volume_per_month"]) == [1000, 100000, 1000000]
-    assert t["total_cost"].isna().all()   # unpriced assumptions stay NaN, never zero
+    assert t["total_cost"].isna().all()       # no measured error rates yet, so no total
+    rates = {k: 0.01 for k in a["error_cost_usd"]}
+    t = cost_model.monthly_table(cost_model.per_request_usage(stage), 0.8, rates, prices, a)
+    assert t["total_cost"][:2].notna().all()  # all assumptions set: 1k and 100k are priced
+    assert t["total_cost"][2:].isna().all()   # 1M needs a GraphHopper plan above Basic, not in config
+    a["fixed_monthly_usd"]["app_hosting"] = None
+    t = cost_model.monthly_table(cost_model.per_request_usage(stage), 0.8, rates, prices, a)
+    assert t["total_cost"].isna().all()       # an unset assumption stays NaN, never zero
     a["fixed_monthly_usd"].update(classifier_hosting=30, training_one_off=12, amortise_months=12)
     assert math.isclose(cost_model.finetune_breakeven(0.0004, 0.0001, a), 31 / 0.0003)
 
@@ -125,3 +137,139 @@ def test_T_10_07_log_schema_accepts_graph_failure_line():
     line = {"request_id": "r1", "stage": "maps", "latency_ms": 3.0, "tokens_in": 0, "tokens_out": 0,
             "cost_usd": 0.0, "api_calls": {}, "decision": "system_error", "error_type": None}
     assert validate_line(line) == ["missing ts"]
+
+
+def test_T_11_04_status_quo_is_minutes_saved_dollars_optional():
+    # Nov 12 meeting: time saved is the main number; dollars only if value_of_time is set.
+    a = cost_model.load_assumptions()
+    s = cost_model.status_quo_saving(25, 3, a)
+    assert s["minutes_saved"] == 22 and math.isnan(s["usd_saved"])
+    a["status_quo"]["value_of_time_usd_per_hour"] = 30
+    assert math.isclose(cost_model.status_quo_saving(25, 3, a)["usd_saved"], 11.0)
+    study = pd.DataFrame({"minutes_spent": [20, 30, 0], "all_requirements_met": ["yes", "no", "yes"]})
+    summary = cost_model.status_quo_from_study(study)   # the template row (0 minutes) is skipped
+    assert summary == {"trips": 2, "median_minutes_manual": 25.0, "all_requirements_met_rate": 0.5}
+
+
+def test_T_10_10_judge_prompt_parse_and_failures():
+    rec = {"item_id": "x1", "utterance": "bike to the ROM", "checks": [{"id": "bike_lanes", "status": "met"}],
+           "must_mention": ["closures_unconfirmed"], "route_facts": {"distance_m": 4200}, "final_text": "Take Bloor."}
+    msgs = judge.build_messages(rec)
+    assert msgs[0]["role"] == "system"
+    assert not any(t in msgs[1]["content"] for t in ("{utterance}", "{checks_json}", "{final_text}"))
+    assert "bike to the ROM" in msgs[1]["content"] and "4200" in msgs[1]["content"]
+    good = '{"all_warnings_present": true, "unsupported_claim": false, "makes_promise": false, "user_knows_next_step": true, "note": "ok"}'
+    assert judge.parse_answer("Sure: " + good)["unsupported_claim"] is False
+    assert judge.parse_answer('{"all_warnings_present": "yes"}') is None
+    replies = iter(["not json", "still not json", good])
+    out = judge.run_judge([rec, dict(rec, item_id="x2")], lambda m: next(replies), retries=1)
+    assert len(out) == 8                                     # 4 questions x 2 replies
+    assert not out[out.item_id == "x1"]["judge_ok"].any()    # both tries failed: not graded
+    assert out[out.item_id == "x2"]["judge_ok"].all()
+
+
+def test_T_10_11_human_grading_sheet_and_judge_input(tmp_path):
+    sheet = tmp_path / "a.csv"
+    sheet.write_text("item_id,grader,all_warnings_present,unsupported_claim,makes_promise,user_knows_next_step,note\n"
+                     "x1,A,yes,no,no,yes,\nx2,A,No,Yes,,yes,blank cell skipped\n")
+    long = judge.load_human_grading(sheet)
+    assert len(long) == 7 and long.set_index(["item_id", "question"]).loc[("x2", "unsupported_claim"), "answer"]
+    state = {"report": {"chosen_route": "r2", "checks": [{"id": "highways", "status": "met", "hard": True}],
+                        "must_mention": ["hours_unconfirmed"]},
+             "candidates": [{"id": "r1", "distance_m": 1}, {"id": "r2", "distance_m": 4200, "geometry": {"x": 1}}],
+             "final": {"text": "Take Bloor."}}
+    ji = judge_input({"item_id": "x1", "utterance": "u"}, state)
+    assert ji["route_facts"]["distance_m"] == 4200 and "geometry" not in ji["route_facts"]
+    assert ji["final_text"] == "Take Bloor." and ji["must_mention"] == ["hours_unconfirmed"]
+
+
+def test_T_10_12_request_line_from_final_state_is_valid():
+    # Built by the runner from a final TripState (models or dicts), it must pass the agreed schema.
+    from eval.run_eval import request_line
+    state = {"guard": {"decision": "allow"}, "classification": {"route_action": "plan", "primary_mode": "bike"},
+             "report": {"decision": "accept", "checks": [{"id": "highways", "status": "met", "hard": True, "evidence": "0 m"}],
+                        "must_mention": ["closures"], "sponsored": None},
+             "draft": {"mentioned_ids": ["closures"]}, "final": {"approved": True, "used_fallback_template": False}}
+    stages = [{"stage": "classify", "latency_ms": 12.5, "cost_usd": 0.001},
+              {"stage": "write", "latency_ms": 30.0, "cost_usd": 0.002}]
+    line = request_line({"item_id": "x1"}, state, "D2", "t", "D2_x1", stages)
+    assert validate_line(line) == []
+    assert line["outcome"] == "accept" and line["stopped_at"] == ""
+    assert math.isclose(line["cost_usd_total"], 0.003) and line["latency_ms_total"] == 42.5
+    crashed = request_line({"item_id": "x2"}, {"handoff": {"reason": "system_error"}, "final": {}}, "D2", "t", "D2_x2",
+                           [{"stage": "maps", "decision": "system_error", "latency_ms": 3.0, "cost_usd": 0.0}])
+    assert crashed["outcome"] == "handoff" and crashed["stopped_at"] == "maps"
+
+
+def test_T_11_05_sponsor_rate_measured_from_the_run():
+    req = pd.DataFrame([request_line("a", "accept"), request_line("b", "accept"), request_line("c", "refuse"),
+                        request_line("d", "accept")])
+    req["sponsored_shown"] = [True, False, False, False]
+    r = cost_model.measured_rates(req)
+    assert math.isclose(r["accept_rate"], 0.75) and math.isclose(r["cards_per_accepted_route"], 1 / 3)
+    assert cost_model.measured_rates(pd.DataFrame()) == {}
+
+
+def test_T_10_13_judge_agreement_with_one_grader():
+    # One grader is enough to run the check; the person-vs-person column is NaN, never a made-up value.
+    rows = lambda ans: pd.DataFrame([{"item_id": i, "question": q, "answer": a}
+                                     for i, a in enumerate(ans) for q in metrics.JUDGE_QUESTIONS])
+    judge_df, human = rows([True, False, True, False]), rows([True, False, True, True])
+    one = metrics.judge_agreement(judge_df, human)
+    assert len(one) == len(metrics.JUDGE_QUESTIONS)
+    assert one["kappa_human_human"].isna().all() and one["kappa_judge_human_b"].isna().all()
+    assert (one["n"] == 4).all() and one["kappa_judge_human_a"].between(-1, 1).all()
+    two = metrics.judge_agreement(judge_df, human, human)
+    assert (two["kappa_human_human"] == 1.0).all()
+
+
+def test_T_10_14_route_review_sheet_and_false_met():
+    from eval import route_review
+    inputs = [{"item_id": f"d2_{i:03d}", "utterance": "u", "route_facts": {"mode": "car"},
+               "checks": [{"id": "avoid:highways", "status": "met", "hard": True, "evidence": "0 m"},
+                          {"id": "flat", "status": "met", "hard": False, "evidence": "10 m"}]} for i in range(6)]
+    e2e = pd.DataFrame({"item_id": [r["item_id"] for r in inputs], "outcome": ["accept"] * 5 + ["handoff"]})
+    sheet = route_review.build_sheet(inputs, e2e, ["A", "B"], n_routes=4)
+    assert sheet["item_id"].nunique() == 4 and "d2_005" not in set(sheet["item_id"])   # accepted routes only
+    assert set(sheet["reviewer"]) == {"A", "B"} and len(sheet) == 8
+    ids = sorted(sheet["item_id"].unique())
+    sheet["reviewer_status"] = "met"
+    sheet.loc[(sheet["item_id"] == ids[0]) & (sheet["check_id"] == "avoid:highways"), "reviewer_status"] = "unmet"
+    sheet.loc[sheet["item_id"] == ids[1], "reviewer_status"] = ""                        # not reviewed yet
+    truth, stats = route_review.score(sheet)
+    t = truth.set_index("item_id")["hard_truly_met"]
+    assert not t[ids[0]] and t[ids[2]] and ids[1] not in t.index                        # blank rows are not judged
+    assert stats["false_met"] == 1 and stats["checks_verifier_met"] == 6 and stats["rows_left_blank"] == 2
+
+
+def test_T_10_15_truth_covers_some_routes_and_p09_not_covered():
+    gold = pd.DataFrame({"item_id": ["a", "b", "c", "d"], "expected_outcome": ["accept"] * 4,
+                         "gold_constraints": [{"mode": "car"}, {"mode": "car"}, {"mode": "hike"}, {"mode": "car"}]})
+    met = [{"id": "x", "status": "met", "hard": True}]
+    logs = pd.DataFrame({"item_id": ["a", "b", "c", "d"], "outcome": ["accept", "accept", "handoff", "handoff"],
+                         "checks": [met, met, [], []],
+                         "handoff_reason": ["", "", "mode_not_supported", "mode_not_supported"]})
+    truth = pd.DataFrame({"item_id": ["a"], "hard_truly_met": [False]})                 # only route a was inspected
+    ts = metrics.trip_success(logs, gold, None, truth).set_index("item_id")
+    assert not ts.loc["a", "success"] and ts.loc["a", "truth_source"] == "human"
+    assert ts.loc["b", "success"] and ts.loc["b", "truth_source"] == "verifier_only"    # not inspected is not a failure
+    assert ts.loc["c", "success"] and ts.loc["c", "not_covered_p09"]                    # hike: "not covered yet" is right
+    assert not ts.loc["d", "success"]                                                   # a car trip handed off is not
+
+
+def test_T_11_06_unknown_api_name_is_never_free():
+    a = cost_model.load_assumptions()
+    prices = cost_model.load_prices()
+    assert cost_model.unpriced_api_names({"geocode": 1, "graphhopper": 1, "directions": 1}, a) == []
+    assert cost_model.unpriced_api_names({"new_api": 2}, a) == ["new_api"]
+    assert math.isnan(cost_model.mapbox_cost({"new_api": 2, "directions": 1}, 1_000_000, prices, a))
+    priced = cost_model.mapbox_cost({"geocode": 1}, 1_000_000, prices, a)
+    assert priced == cost_model.mapbox_cost({"geocoding": 1}, 1_000_000, prices, a) > 0
+
+
+def test_T_10_16_extractor_accuracy_with_missing_values():
+    # D2 rows read through pandas carry NaN where a list is missing; that must compare as an empty list.
+    gold = pd.DataFrame({"item_id": ["a", "b"], "avoid": [["highways"], float("nan")], "mode": ["car", "bike"]})
+    pred = pd.DataFrame({"item_id": ["a", "b"], "avoid": [["highways"], []], "mode": ["car", "walk"]})
+    acc = metrics.extraction_field_accuracy(pred, gold, ["avoid", "mode"]).set_index("field")["accuracy"]
+    assert acc["avoid"] == 1.0 and acc["mode"] == 0.5
