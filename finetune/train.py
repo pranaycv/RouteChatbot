@@ -44,7 +44,15 @@ def count_records(path: Path) -> int:
     return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
 
 
-def effective_settings(args: argparse.Namespace, cfg: dict) -> dict:
+def warmup_steps_for(n_train: int, sft: dict, warmup_ratio: float) -> int:
+    """Warm-up as a whole number of optimizer steps. transformers 5 removed warmup_ratio; steps work everywhere."""
+    per_step = int(sft["per_device_train_batch_size"]) * int(sft["gradient_accumulation_steps"])
+    steps_per_epoch = max(1, -(-n_train // per_step))
+    total = int(round(steps_per_epoch * float(sft["num_train_epochs"])))
+    return max(1, int(round(total * warmup_ratio)))
+
+
+def effective_settings(args: argparse.Namespace, cfg: dict, n_train: int) -> dict:
     lora = dict(cfg["lora"])
     sft = dict(cfg["sft"])
     if args.r is not None:
@@ -54,13 +62,15 @@ def effective_settings(args: argparse.Namespace, cfg: dict) -> dict:
     if args.epochs is not None:
         sft["num_train_epochs"] = args.epochs
     sft["seed"] = cfg["seed"]
-    return {"base_model": base_model_name(), "lora": lora, "sft": sft, "subset": args.subset}
+    warmup_ratio = float(sft.pop("warmup_ratio", 0.0))
+    sft["warmup_steps"] = warmup_steps_for(n_train, sft, warmup_ratio)
+    return {"base_model": base_model_name(), "lora": lora, "sft": sft, "warmup_ratio": warmup_ratio, "subset": args.subset}
 
 
 def train(args: argparse.Namespace) -> dict:
     cfg = load_ft_config()
-    settings = effective_settings(args, cfg)
     n_train, n_val = count_records(args.train), count_records(args.val)
+    settings = effective_settings(args, cfg, min(n_train, args.subset) if args.subset else n_train)
     summary = {"settings": settings, "train_records": n_train, "val_records": n_val, "out": str(args.out)}
     if args.dry_run:
         print(json.dumps(summary, indent=2))
