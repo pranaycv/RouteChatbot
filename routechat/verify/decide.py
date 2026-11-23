@@ -219,6 +219,11 @@ def verify_node(state):
     ]
     if not evaluated:
         reason = next((route.error for route in routes if route.error), "no_route")
+        if reason == "mode_not_supported":
+            mode = next(route.mode for route in routes if route.error == reason)
+            if mode in {"unspecified", "hike", "multimodal"}:
+                decision = "clarify" if mode == "unspecified" else "refuse"
+                return {"report": _report(decision, reason=reason), "handoff": None}
         return _handoff(state, constraints, reason)
 
     passing = [

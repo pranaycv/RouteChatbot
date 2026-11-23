@@ -240,3 +240,24 @@ def test_graphhopper_standard_does_not_retry_identical_request():
     report = verify_node(state)["report"]
     assert report.decision == "accept"
     assert report.must_mention == ["flat"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "decision"),
+    [("unspecified", "clarify"), ("hike", "refuse"), ("multimodal", "refuse")],
+)
+def test_unsupported_mode_gets_direct_reply_without_ticket(mode, decision):
+    from routechat.agents.templates import mode_not_supported_text
+    from routechat.agents.writer import template_message
+    from routechat.logging import request_outcome
+
+    state = _state(mode=mode)
+    state["candidates"] = [RouteCandidate(
+        id="unsupported", provider="graphhopper", mode=mode, error="mode_not_supported",
+    )]
+    state.update(verify_node(state))
+
+    assert state["handoff"] is None
+    assert state["report"].decision == decision
+    assert template_message(state) == mode_not_supported_text(mode)
+    assert request_outcome(state) == decision

@@ -59,7 +59,7 @@ GuardReason = Literal[
 MissingField = Literal["origin", "destination", "unparseable"]
 PlaceRole = Literal["origin", "stop", "destination"]
 CheckStatus = Literal["met", "unmet", "unverifiable"]
-VerificationDecision = Literal["accept", "revise", "handoff"]
+VerificationDecision = Literal["accept", "revise", "handoff", "clarify", "refuse"]
 ReplyKind = Literal["template", "llm"]
 
 

@@ -284,6 +284,8 @@ def request_outcome(state: dict[str, Any]) -> str:
     report = _plain(state.get("report")) or {}
     if report.get("decision") == "handoff" or state.get("handoff"):
         return "handoff"
+    if report.get("decision") in ("clarify", "refuse"):
+        return report["decision"]
     return "accept"
 
 
@@ -297,7 +299,7 @@ def _stopped_at(state: dict[str, Any]) -> str:
     constraints = _plain(state.get("constraints")) or {}
     if constraints.get("missing_field") or constraints.get("too_many_stops"):
         return "extract"
-    if (_plain(state.get("report")) or {}).get("decision") == "handoff":
+    if (_plain(state.get("report")) or {}).get("decision") in ("handoff", "clarify", "refuse"):
         return "verify"
     return ""
 
