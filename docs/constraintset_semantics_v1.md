@@ -19,7 +19,7 @@ The ConstraintSet is the form the extractor fills in from the user's message. Ma
 | destination | str or null | End place, as written. | Missing or personal, unless `loop` is true. Code sets `missing_field = destination`. | "University of Toronto" |
 | stops | list of Stop | Places to visit on the way. See Stop below. | No stops requested. | one stop, Canadian Tire |
 | mode | walk, bike, hike, run, transit, car, multimodal, unspecified | How the user travels. | `unspecified`: code copies the classifier's primary_mode. | "bike" |
-| modes_to_compare | list of modes, at most 2 | Only for compare requests. | Not a comparison. | ["walk", "transit"] |
+| modes_to_compare | list of modes, at most 2 | Only for compare requests. Transit never appears: a comparison against transit is refused by the classifier (schemas v1.1, out_of_scope_mode). | Not a comparison. | ["walk", "bike"] |
 | compare_threshold_min | int or null, minutes | The cutoff between the two modes. | No threshold given. | 30 for "walk if under 30 min" |
 | avoid | list from highways, tolls, ferries, unpaved. No duplicates. | Things the route must not use. | Nothing to avoid. | ["highways"] |
 | prefer | list from bike_lanes, quiet_roads, scenic, lit_streets, step_free. No duplicates. | Things the route should favour. | No preference. | ["bike_lanes"] |
@@ -52,7 +52,7 @@ The ConstraintSet is the form the extractor fills in from the user's message. Ma
 - Scenic, countryside or quiet words add `scenic` and `quiet_roads` to prefer.
 - Two trips in one message: extract the first only, add an ambiguity naming the second.
 - Replan (turn 2): return the full merged trip. Start from the earlier ConstraintSet, change only what the user changed. "Skip the Canadian Tire" removes that stop and keeps everything else.
-- Modes the pilot does not route (hike, transit): the extractor still fills the form normally. Map tools return `transit_not_supported` and the writer explains. The extractor does not refuse or relabel.
+- Transit requests never reach the extractor: the classifier refuses them with `out_of_scope_mode` (team decision 23 Nov, schemas v1.1). A hike still reaches it and is filled in normally; the map tools and the writer turn it away.
 - A loop needs `target_distance_km`. Map tools cannot build or verify a loop without a length, so when the user gives none the extractor adds an ambiguity ("loop length not given") rather than inventing one.
 
 ## Agreed with Preeti (WP4, WP5), 18 Nov 2026

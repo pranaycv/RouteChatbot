@@ -113,11 +113,11 @@ def test_postprocess_flags_arrive_before_depart():
 
 def test_postprocess_dedupes_lists_and_clips_compare_modes():
     shown = ConstraintSet.model_validate(EXAMPLES["example_3"]["model_output"])
-    messy = shown.model_copy(update={"avoid": ["tolls", "tolls", "highways"], "prefer": ["scenic", "scenic"], "modes_to_compare": ["walk", "transit", "bike"]})
+    messy = shown.model_copy(update={"avoid": ["tolls", "tolls", "highways"], "prefer": ["scenic", "scenic"], "modes_to_compare": ["walk", "bike", "car"]})
     fixed = postprocess(messy, _cls(EXAMPLES["example_3"]))
     assert fixed.avoid == ["tolls", "highways"]
     assert fixed.prefer == ["scenic"]
-    assert fixed.modes_to_compare == ["walk", "transit"]
+    assert fixed.modes_to_compare == ["walk", "bike"]
 
 
 def test_two_validation_failures_give_unparseable(monkeypatch):

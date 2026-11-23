@@ -20,3 +20,8 @@ Every prompt change gets an entry: what changed, why, and the metric before and 
 - Why: WP6. The wording follows policy P-03 (say what was not confirmed), P-04 (no booking or promise), P-05 (label a sponsor), and P-08 (a handoff says a person has the trip).
 - Metric before: none. This is the first version.
 - Metric after: not measured. Faithfulness and disclosure completeness wait for the WP10 judge.
+
+## label_guide_v2.md
+
+- **2026-11-23, v2.** Transit is now refused: a request that needs public transit for any part of the trip, a transit schedule question, or a comparison against transit gets `refuse` / `out_of_scope_mode` with `primary_mode = unspecified`. This matches schemas v1.1 (PR #13) and the D1 data (58 train / 10 val / 17 test records carry out_of_scope_mode, all with primary_mode unspecified). Hike is still labelled hike and not refused. Rule 6 no longer lists "the last train tonight"; rule 5 now says two in-pilot modes. `routechat/classifier/predict.py` points at v2; v1 stays for the record. Metric before and after: not yet measured, the four-backend run on the frozen test set is next. Few-shot v1 updated in the same change: the compare example is walk vs bike, and the b2b refusal example is replaced by a transit refusal so each of the two most common refusal reasons in D1 has an example. Replay fixtures re-seeded (synthetic).
+- **extractor_v1.md, same day:** the compare example and field rule use walk vs bike, since a transit comparison never reaches the extractor now. No other change.

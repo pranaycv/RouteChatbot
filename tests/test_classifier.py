@@ -160,7 +160,7 @@ def test_T_2_04_all_four_backends_return_a_classification_for_ten_smoke_turns(na
         c = classify(UserTurn.model_validate(row["turn"]), backend=backend, request_id=row["id"])
         assert isinstance(c, RouteClassification)
         assert labels_json(c) == expected[row["id"]]
-    assert len(seen) == 10
+    assert len(seen) == len(SMOKE)
     # Prompted backends carry the eight few-shot pairs; local backends get the label guide only.
     assert all(n == (18 if backend.uses_examples else 2) for n in seen)
 
@@ -197,7 +197,8 @@ def test_graph_can_find_classify_node_and_classify():
 def test_build_messages_uses_label_guide_and_fewshot():
     with_examples = build_messages(RUNNING, include_examples=True)
     without = build_messages(RUNNING, include_examples=False)
-    assert with_examples[0]["role"] == "system" and "Label guide v1" in with_examples[0]["content"]
+    assert with_examples[0]["role"] == "system" and "Label guide v2" in with_examples[0]["content"]
+    assert "out_of_scope_mode" in with_examples[0]["content"]
     assert len(with_examples) == 2 + 2 * 8 and len(without) == 2
     assert with_examples[-1]["content"] == RUNNING.model_dump_json()
     assert all(json.loads(m["content"]).keys() == {"route_action", "primary_mode", "needs_live_data", "clarify_field", "refusal_reason"} for m in with_examples[2:-1:2])
@@ -225,4 +226,4 @@ def test_log_line_matches_wp10_schema(caplog):
     classify(RUNNING, backend=ScriptedBackend([_labels()]), request_id="r_log")
     line = json.loads([r.message for r in caplog.records if r.name == "routechat.classify"][-1])
     assert validate_line(line) == []
-    assert line["stage"] == "classify" and line["prompt_version"] == "label_guide_v1"
+    assert line["stage"] == "classify" and line["prompt_version"] == "label_guide_v2"

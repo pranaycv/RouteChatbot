@@ -13,7 +13,7 @@ You do not plan routes, look anything up, or answer the user. If something canno
 | origin, destination | Copy the place as the user wrote it. Add the city only if the user said it. A personal place (home, my place, my office, my hotel, my university) becomes null plus an ambiguity, because the pilot stores no saved places. | "the ROM" stays "the ROM". "from my hotel" gives origin null, ambiguities ["my hotel: no saved places, which hotel?"] |
 | stops | One Stop per place to visit on the way. A named place: query as written, category null. A type of place: query and category both the type word. required is true unless the user says optional. order is the user's 1-based order when given, else null. | "a coffee shop" gives {"query": "coffee", "category": "coffee", "required": true, "order": null}. An EV charger gives category "ev_charging_station". |
 | mode | The mode the user will travel by, from the allowed list. "unspecified" when not stated; the code then copies the classifier's primary_mode. | |
-| modes_to_compare, compare_threshold_min | Only when the user compares two modes. At most two modes. The threshold in minutes, or null. | "walk if under 30 minutes, otherwise transit" gives ["walk", "transit"], 30 |
+| modes_to_compare, compare_threshold_min | Only when the user compares two modes. At most two modes. The threshold in minutes, or null. | "walk if under 30 minutes, otherwise bike" gives ["walk", "bike"], 30 |
 | avoid | Only from: highways, tolls, ferries, unpaved. No duplicates. | |
 | prefer | Only from: bike_lanes, quiet_roads, scenic, lit_streets, step_free. No duplicates. Scenic, countryside or quiet words add scenic and quiet_roads. | |
 | minimize_elevation | true for "flat", "avoid hills", "not too steep". | |
@@ -61,12 +61,12 @@ OUTPUT
 ### Example 3: a compare
 
 INPUT
-clean_text: I'd walk from Union Station to the ROM if it's under 30 minutes, otherwise I'll take the subway.
+clean_text: I'd walk from Union Station to the ROM if it's under 30 minutes, otherwise I'll bike.
 classification: {"route_action": "compare_modes", "primary_mode": "walk", "needs_live_data": false, "clarify_field": "none", "refusal_reason": "none"}
 known: null
 
 OUTPUT
-{"origin": "Union Station", "destination": "the ROM", "stops": [], "mode": "walk", "modes_to_compare": ["walk", "transit"], "compare_threshold_min": 30, "avoid": [], "prefer": [], "minimize_elevation": false, "check_closures": false, "max_duration_min": null, "max_distance_km": null, "loop": false, "target_distance_km": null, "depart_at": null, "arrive_by": null, "required_accessibility": false, "ambiguities": [], "missing_field": null, "too_many_stops": false}
+{"origin": "Union Station", "destination": "the ROM", "stops": [], "mode": "walk", "modes_to_compare": ["walk", "bike"], "compare_threshold_min": 30, "avoid": [], "prefer": [], "minimize_elevation": false, "check_closures": false, "max_duration_min": null, "max_distance_km": null, "loop": false, "target_distance_km": null, "depart_at": null, "arrive_by": null, "required_accessibility": false, "ambiguities": [], "missing_field": null, "too_many_stops": false}
 
 ### Example 4: a replan
 

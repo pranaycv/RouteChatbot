@@ -36,7 +36,7 @@ from routechat.config import ROOT, get_settings
 from routechat.llm import api_calls_for, log_stage
 from routechat.schemas import ConstraintSet, RouteClassification, UserTurn
 
-PROMPT_VERSION = "label_guide_v1"
+PROMPT_VERSION = "label_guide_v2"  # v2 (23 Nov): transit is refused with out_of_scope_mode, matching D1 and schemas v1.1
 LABEL_GUIDE_PATH = ROOT / "prompts" / f"{PROMPT_VERSION}.md"
 FEWSHOT_PATH = ROOT / "prompts" / "classifier_fewshot_v1.jsonl"
 BACKEND_NAMES = ("ft", "base", "prompted_small", "prompted_large")

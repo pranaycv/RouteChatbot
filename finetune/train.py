@@ -7,7 +7,7 @@
 
 Settings come from finetune/config.yaml (LoraConfig and SFTConfig exactly as the handbook lists
 them). Prompt-completion data makes TRL compute the loss on the completion only. Checkpoints are
-saved every eval_steps; finetune/select.py then picks the one with the best joint exact match on
+saved every eval_steps; finetune/select_checkpoint.py then picks the one with the best joint exact match on
 validation. Never pass the test set here.
 
 Outputs in --out: checkpoint-*/ (adapter weights per save), final/ (last adapter), train_log.json

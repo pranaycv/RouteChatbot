@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from finetune import prepare, select
+from finetune import prepare
+from finetune import select_checkpoint as select
 from finetune.train import effective_settings, load_ft_config
 from routechat.classifier.predict import adapter_dir, build_messages, labels_json
 from routechat.schemas import RouteClassification, UserTurn
