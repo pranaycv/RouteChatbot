@@ -112,6 +112,16 @@ class LocalBackend:
         self.adapter_dir = adapter_dir
         self.max_new_tokens = max_new_tokens
 
+    @property
+    def prompt_version(self) -> str | None:
+        """The label guide the adapter was trained with (prompt_version.txt next to its weights), else None."""
+        if self.adapter_dir is None:
+            return None
+        marker = Path(self.adapter_dir) / "prompt_version.txt"
+        if not marker.exists():
+            return None
+        return marker.read_text(encoding="utf-8").strip() or None
+
     def _resolved_adapter(self) -> str | None:
         if self.adapter_dir is None:
             return None

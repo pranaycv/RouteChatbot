@@ -2,7 +2,9 @@
 
     uv run python scripts/merge_classifier_results.py
 
-eval/run_eval.py --classifier writes eval/results/classifier.csv for whichever backends ran. When the
+eval/run_eval.py --classifier writes eval/results/classifier.csv for whichever backends ran.
+The latency lookup builds the prompt with the current label guide, so set CLASSIFIER_PROMPT_VERSION to the
+version the prompted runs used. When the
 backends were run in separate invocations (prompted on the API, base and ft on the GPU), each run's
 file was copied aside as classifier_<group>.csv. This script stacks them, and for backends whose
 responses were replayed from routechat/fixtures/llm (FIXTURES=record on a rerun) it replaces the
@@ -13,6 +15,7 @@ describe the model and not the cache.
 from __future__ import annotations
 
 import json
+import os
 import statistics
 import sys
 from pathlib import Path
@@ -27,7 +30,11 @@ from routechat.llm import FIXTURE_DIR, fixture_key  # noqa: E402
 from routechat.schemas import UserTurn  # noqa: E402
 
 RESULTS = ROOT / "eval" / "results"
-PARTS = ("prompted", "base", "ft")
+# MERGE_PARTS, MERGE_OUT and MERGE_RUN_ID let the same script build a second comparison (for example the
+# label guide v3 runs: MERGE_PARTS=prompted_v3,base,ft_v3 MERGE_OUT=classifier_v3.csv MERGE_RUN_ID=d1_final_v3).
+PARTS = tuple(os.environ.get("MERGE_PARTS", "prompted,base,ft").split(","))
+OUT_NAME = os.environ.get("MERGE_OUT", "classifier.csv")
+RUN_ID = os.environ.get("MERGE_RUN_ID", "d1_final")
 D1_TEST = ROOT / "data" / "d1" / "test.jsonl"
 
 
@@ -76,11 +83,11 @@ def main() -> None:
                 df.loc[df.backend == name, "p95_ms"] = percentile(live, 0.95)
                 df.loc[df.backend == name, "latency_source"] = f"recorded at live call ({len(live)} calls)"
     df["latency_source"] = df.get("latency_source", pd.Series(dtype=str)).fillna("wall clock during the run")
-    df["run_id"] = "d1_final"
+    df["run_id"] = RUN_ID
 
     order = {"ft": 0, "base": 1, "prompted_small": 2, "prompted_large": 3}
     df = df.sort_values("backend", key=lambda s: s.map(order)).reset_index(drop=True)
-    out = RESULTS / "classifier.csv"
+    out = RESULTS / OUT_NAME
     df.to_csv(out, index=False)
     print(f"wrote {out} ({len(df)} rows)")
     cols = ["backend", "joint_exact_match", "policy_critical_error_rate", "json_failure_rate", "macro_f1_route_action", "p50_ms", "p95_ms", "cost_per_1000_calls_usd"]

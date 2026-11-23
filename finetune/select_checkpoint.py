@@ -135,6 +135,9 @@ def main() -> None:
         if args.copy_to.exists():
             shutil.rmtree(args.copy_to)
         shutil.copytree(args.run / best, args.copy_to)
+        marker = args.run / "prompt_version.txt"
+        if marker.exists():
+            shutil.copy(marker, args.copy_to / "prompt_version.txt")
         print(f"copied to {args.copy_to}")
 
 

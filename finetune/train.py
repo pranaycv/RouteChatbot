@@ -62,6 +62,8 @@ def effective_settings(args: argparse.Namespace, cfg: dict, n_train: int) -> dic
         sft["learning_rate"] = args.lr
     if args.epochs is not None:
         sft["num_train_epochs"] = args.epochs
+    if args.max_length is not None:
+        sft["max_length"] = args.max_length
     sft["seed"] = cfg["seed"]
     warmup_ratio = float(sft.pop("warmup_ratio", 0.0))
     sft["warmup_steps"] = warmup_steps_for(n_train, sft, warmup_ratio)
@@ -101,6 +103,18 @@ def train(args: argparse.Namespace) -> dict:
     if args.subset is not None:
         data["train"] = data["train"].shuffle(seed=cfg["seed"]).select(range(min(args.subset, len(data["train"]))))
     tokenizer = AutoTokenizer.from_pretrained(settings["base_model"])
+    # A record longer than max_length loses the end of its completion silently (the handbook's 512 would have
+    # dropped every label), so measure first and fail fast. The chat template adds a few tokens per message.
+    longest_tokens = max(
+        len(tokenizer(tokenizer.apply_chat_template(r["prompt"] + r["completion"], tokenize=False))["input_ids"])
+        for r in data["train"]
+    )
+    if longest_tokens > int(settings["sft"]["max_length"]):
+        raise SystemExit(
+            f"longest training record is {longest_tokens} tokens but max_length is {settings['sft']['max_length']}: "
+            "raise --max-length (or config sft.max_length) or the completions will be truncated away"
+        )
+    summary["longest_record_tokens"] = longest_tokens
     if args.bf16:
         # Ampere or newer GPU (e.g. an RTX 3080): bf16 base weights and bf16 mixed precision need no
         # gradient scaler and halve the memory of the fp32 path. Kaggle's T4 has no bf16; it takes the path below.
@@ -121,6 +135,11 @@ def train(args: argparse.Namespace) -> dict:
 
     args.out.mkdir(parents=True, exist_ok=True)
     trainer.save_model(str(args.out / "final"))
+    from routechat.classifier.predict import prompt_version
+
+    # The guide version the prompts were built with; select_checkpoint copies it next to the adapter so
+    # predict.py serves the adapter with the same guide it was trained on.
+    (args.out / "prompt_version.txt").write_text(prompt_version() + "\n", encoding="utf-8")
     (args.out / "train_log.json").write_text(json.dumps(trainer.state.log_history, indent=2), encoding="utf-8")
     gpu_hours = elapsed / 3600 if torch.cuda.is_available() else 0.0
     summary.update(
@@ -144,6 +163,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--r", type=int, default=None, help="LoRA rank override (sweep)")
     parser.add_argument("--lr", type=float, default=None, help="learning rate override (sweep)")
+    parser.add_argument("--max-length", type=int, default=None, help="override sft.max_length (a longer label guide needs more)")
     parser.add_argument("--epochs", type=float, default=None)
     parser.add_argument("--subset", type=int, default=None, help="train on the first N shuffled records (learning curve)")
     parser.add_argument("--dry-run", action="store_true", help="print the effective settings and record counts, no training")
