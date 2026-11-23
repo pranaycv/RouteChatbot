@@ -3,9 +3,9 @@
   "model": "gpt-4.1-mini",
   "temperature": 0.0,
   "schema": "ConstraintSet",
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.682206+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:42:54.911919+00:00",
   "messages": [
     {
       "role": "system",
@@ -16,7 +16,7 @@
       "content": "clean_text: Walk from the Eaton Centre to Nathan Phillips Square, then later I want to bike from Union to the Beaches.\nclassification: {\"route_action\":\"plan\",\"primary_mode\":\"walk\",\"needs_live_data\":false,\"clarify_field\":\"none\",\"refusal_reason\":\"none\"}\nknown: null"
     }
   ],
-  "text": "{\"origin\":\"the Eaton Centre\",\"destination\":\"Nathan Phillips Square\",\"stops\":[],\"mode\":\"walk\",\"modes_to_compare\":[],\"compare_threshold_min\":null,\"avoid\":[],\"prefer\":[],\"minimize_elevation\":false,\"check_closures\":false,\"max_duration_min\":null,\"max_distance_km\":null,\"loop\":false,\"target_distance_km\":null,\"depart_at\":null,\"arrive_by\":null,\"required_accessibility\":false,\"ambiguities\":[\"second trip not extracted: bike from Union to the Beaches\"],\"missing_field\":null,\"too_many_stops\":false}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "text": "{\"origin\": \"the Eaton Centre\", \"destination\": \"Nathan Phillips Square\", \"stops\": [], \"mode\": \"walk\", \"modes_to_compare\": [], \"compare_threshold_min\": null, \"avoid\": [], \"prefer\": [], \"minimize_elevation\": false, \"check_closures\": false, \"max_duration_min\": null, \"max_distance_km\": null, \"loop\": false, \"target_distance_km\": null, \"depart_at\": null, \"arrive_by\": null, \"required_accessibility\": false, \"ambiguities\": [\"second trip not extracted: bike from Union to the Beaches\"], \"missing_field\": null, \"too_many_stops\": false}",
+  "tokens_in": 3510,
+  "tokens_out": 145
 }

@@ -3,9 +3,9 @@
   "model": "gpt-4.1-mini",
   "temperature": 0.0,
   "schema": "ConstraintSet",
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.682206+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:42:52.411685+00:00",
   "messages": [
     {
       "role": "system",
@@ -17,6 +17,6 @@
     }
   ],
   "text": "{\"origin\":null,\"destination\":\"Pearson Airport\",\"stops\":[],\"mode\":\"car\",\"modes_to_compare\":[],\"compare_threshold_min\":null,\"avoid\":[\"tolls\"],\"prefer\":[],\"minimize_elevation\":false,\"check_closures\":false,\"max_duration_min\":null,\"max_distance_km\":null,\"loop\":false,\"target_distance_km\":null,\"depart_at\":null,\"arrive_by\":\"17:00\",\"required_accessibility\":false,\"ambiguities\":[\"my office: no saved places, which address?\"],\"missing_field\":null,\"too_many_stops\":false}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "tokens_in": 3506,
+  "tokens_out": 124
 }

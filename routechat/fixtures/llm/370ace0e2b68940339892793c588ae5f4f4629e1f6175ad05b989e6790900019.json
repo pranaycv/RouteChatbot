@@ -3,9 +3,9 @@
   "model": "gpt-4.1-mini",
   "temperature": 0.0,
   "schema": null,
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.692181+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:43:31.523386+00:00",
   "messages": [
     {
       "role": "system",
@@ -80,7 +80,7 @@
       "content": "{\"utterance\":\"Is Lake Shore closed near Jameson right now?\",\"turn_index\":0,\"known\":null}"
     }
   ],
-  "text": "{\"route_action\":\"lookup_only\",\"primary_mode\":\"unspecified\",\"needs_live_data\":true,\"clarify_field\":\"none\",\"refusal_reason\":\"none\"}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "text": "{\"route_action\":\"lookup_only\",\"primary_mode\":\"car\",\"needs_live_data\":true,\"clarify_field\":\"none\",\"refusal_reason\":\"none\"}",
+  "tokens_in": 2174,
+  "tokens_out": 31
 }

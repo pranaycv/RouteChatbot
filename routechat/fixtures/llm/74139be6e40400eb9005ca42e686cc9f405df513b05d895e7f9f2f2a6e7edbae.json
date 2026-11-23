@@ -3,9 +3,9 @@
   "model": "gpt-4.1-mini",
   "temperature": 0.0,
   "schema": "ConstraintSet",
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.683204+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:42:58.375586+00:00",
   "messages": [
     {
       "role": "system",
@@ -16,7 +16,7 @@
       "content": "clean_text: Drive from Union Station to the Ontario Science Centre and stop at a Canadian Tire, a Shoppers, an LCBO and a Tim Hortons on the way.\nclassification: {\"route_action\":\"plan\",\"primary_mode\":\"car\",\"needs_live_data\":false,\"clarify_field\":\"none\",\"refusal_reason\":\"none\"}\nknown: null"
     }
   ],
-  "text": "{\"origin\":\"Union Station\",\"destination\":\"the Ontario Science Centre\",\"stops\":[{\"query\":\"Canadian Tire\",\"category\":null,\"required\":true,\"order\":null},{\"query\":\"Shoppers\",\"category\":null,\"required\":true,\"order\":null},{\"query\":\"LCBO\",\"category\":null,\"required\":true,\"order\":null},{\"query\":\"Tim Hortons\",\"category\":null,\"required\":true,\"order\":null}],\"mode\":\"car\",\"modes_to_compare\":[],\"compare_threshold_min\":null,\"avoid\":[],\"prefer\":[],\"minimize_elevation\":false,\"check_closures\":false,\"max_duration_min\":null,\"max_distance_km\":null,\"loop\":false,\"target_distance_km\":null,\"depart_at\":null,\"arrive_by\":null,\"required_accessibility\":false,\"ambiguities\":[],\"missing_field\":null,\"too_many_stops\":false}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "text": "{\"origin\": \"Union Station\", \"destination\": \"the Ontario Science Centre\", \"stops\": [{\"query\": \"Canadian Tire\", \"category\": null, \"required\": true, \"order\": 1}, {\"query\": \"Shoppers\", \"category\": null, \"required\": true, \"order\": 2}, {\"query\": \"LCBO\", \"category\": null, \"required\": true, \"order\": 3}, {\"query\": \"Tim Hortons\", \"category\": null, \"required\": true, \"order\": 4}], \"mode\": \"car\", \"modes_to_compare\": [], \"compare_threshold_min\": null, \"avoid\": [], \"prefer\": [], \"minimize_elevation\": false, \"check_closures\": false, \"max_duration_min\": null, \"max_distance_km\": null, \"loop\": false, \"target_distance_km\": null, \"depart_at\": null, \"arrive_by\": null, \"required_accessibility\": false, \"ambiguities\": [], \"missing_field\": null, \"too_many_stops\": false}",
+  "tokens_in": 3520,
+  "tokens_out": 225
 }

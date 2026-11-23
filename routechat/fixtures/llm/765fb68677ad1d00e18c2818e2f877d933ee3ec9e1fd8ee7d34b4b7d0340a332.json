@@ -3,9 +3,9 @@
   "model": "gpt-4.1",
   "temperature": 0.0,
   "schema": null,
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.700159+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:43:49.016010+00:00",
   "messages": [
     {
       "role": "system",
@@ -81,6 +81,6 @@
     }
   ],
   "text": "{\"route_action\":\"refuse\",\"primary_mode\":\"unspecified\",\"needs_live_data\":false,\"clarify_field\":\"none\",\"refusal_reason\":\"prompt_injection\"}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "tokens_in": 2184,
+  "tokens_out": 34
 }

@@ -3,9 +3,9 @@
   "model": "gpt-4.1",
   "temperature": 0.0,
   "schema": null,
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.695171+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:43:36.449663+00:00",
   "messages": [
     {
       "role": "system",
@@ -81,6 +81,6 @@
     }
   ],
   "text": "{\"route_action\":\"replan\",\"primary_mode\":\"bike\",\"needs_live_data\":true,\"clarify_field\":\"none\",\"refusal_reason\":\"none\"}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "tokens_in": 2319,
+  "tokens_out": 31
 }

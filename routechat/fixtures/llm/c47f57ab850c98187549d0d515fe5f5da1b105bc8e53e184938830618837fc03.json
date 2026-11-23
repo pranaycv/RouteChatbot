@@ -3,9 +3,9 @@
   "model": "gpt-4.1-mini",
   "temperature": 0.0,
   "schema": "ConstraintSet",
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.680212+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:42:44.837253+00:00",
   "messages": [
     {
       "role": "system",
@@ -17,6 +17,6 @@
     }
   ],
   "text": "{\"origin\":\"Trinity Bellwoods Park\",\"destination\":null,\"stops\":[],\"mode\":\"run\",\"modes_to_compare\":[],\"compare_threshold_min\":null,\"avoid\":[],\"prefer\":[\"quiet_roads\"],\"minimize_elevation\":false,\"check_closures\":false,\"max_duration_min\":null,\"max_distance_km\":null,\"loop\":true,\"target_distance_km\":10.0,\"depart_at\":null,\"arrive_by\":null,\"required_accessibility\":false,\"ambiguities\":[],\"missing_field\":null,\"too_many_stops\":false}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "tokens_in": 3504,
+  "tokens_out": 117
 }

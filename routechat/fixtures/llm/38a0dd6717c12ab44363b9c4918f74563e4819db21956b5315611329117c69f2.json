@@ -3,9 +3,9 @@
   "model": "gpt-4.1-mini",
   "temperature": 0.0,
   "schema": "ConstraintSet",
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.683204+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:43:01.361022+00:00",
   "messages": [
     {
       "role": "system",
@@ -16,7 +16,7 @@
       "content": "clean_text: A loop from Humber Bay Park, nothing too steep.\nclassification: {\"route_action\":\"plan\",\"primary_mode\":\"bike\",\"needs_live_data\":false,\"clarify_field\":\"none\",\"refusal_reason\":\"none\"}\nknown: null"
     }
   ],
-  "text": "{\"origin\":\"Humber Bay Park\",\"destination\":null,\"stops\":[],\"mode\":\"unspecified\",\"modes_to_compare\":[],\"compare_threshold_min\":null,\"avoid\":[],\"prefer\":[],\"minimize_elevation\":true,\"check_closures\":false,\"max_duration_min\":null,\"max_distance_km\":null,\"loop\":true,\"target_distance_km\":null,\"depart_at\":null,\"arrive_by\":null,\"required_accessibility\":false,\"ambiguities\":[],\"missing_field\":null,\"too_many_stops\":false}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "text": "{\"origin\": \"Humber Bay Park\", \"destination\": null, \"stops\": [], \"mode\": \"bike\", \"modes_to_compare\": [], \"compare_threshold_min\": null, \"avoid\": [], \"prefer\": [], \"minimize_elevation\": true, \"check_closures\": false, \"max_duration_min\": null, \"max_distance_km\": null, \"loop\": true, \"target_distance_km\": null, \"depart_at\": null, \"arrive_by\": null, \"required_accessibility\": false, \"ambiguities\": [], \"missing_field\": null, \"too_many_stops\": false}",
+  "tokens_in": 3499,
+  "tokens_out": 131
 }

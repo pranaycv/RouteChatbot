@@ -3,9 +3,9 @@
   "model": "gpt-4.1-mini",
   "temperature": 0.0,
   "schema": null,
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.690221+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:43:25.354612+00:00",
   "messages": [
     {
       "role": "system",
@@ -80,7 +80,7 @@
       "content": "{\"utterance\":\"Plan the fastest loop for my 6 delivery vans across the GTA, about 40 drops each.\",\"turn_index\":0,\"known\":null}"
     }
   ],
-  "text": "{\"route_action\":\"refuse\",\"primary_mode\":\"car\",\"needs_live_data\":false,\"clarify_field\":\"none\",\"refusal_reason\":\"out_of_scope_b2b\"}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "text": "{\"route_action\":\"refuse\",\"primary_mode\":\"unspecified\",\"needs_live_data\":false,\"clarify_field\":\"none\",\"refusal_reason\":\"out_of_scope_b2b\"}",
+  "tokens_in": 2183,
+  "tokens_out": 37
 }

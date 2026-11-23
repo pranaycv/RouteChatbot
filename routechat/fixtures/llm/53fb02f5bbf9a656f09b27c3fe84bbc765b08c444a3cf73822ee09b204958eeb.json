@@ -3,9 +3,9 @@
   "model": "gpt-4.1-mini",
   "temperature": 0.0,
   "schema": "ConstraintSet",
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.679214+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:42:42.691527+00:00",
   "messages": [
     {
       "role": "system",
@@ -17,6 +17,6 @@
     }
   ],
   "text": "{\"origin\":\"King Station\",\"destination\":\"University of Toronto\",\"stops\":[{\"query\":\"Canadian Tire\",\"category\":null,\"required\":true,\"order\":null}],\"mode\":\"bike\",\"modes_to_compare\":[],\"compare_threshold_min\":null,\"avoid\":[\"highways\"],\"prefer\":[\"bike_lanes\"],\"minimize_elevation\":true,\"check_closures\":true,\"max_duration_min\":null,\"max_distance_km\":null,\"loop\":false,\"target_distance_km\":null,\"depart_at\":null,\"arrive_by\":null,\"required_accessibility\":false,\"ambiguities\":[],\"missing_field\":null,\"too_many_stops\":false}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "tokens_in": 3522,
+  "tokens_out": 135
 }

@@ -1,11 +1,11 @@
 {
-  "key": "42c51ab7bdc66a0d331955ea75de9c35b0df706a77a86e10587fd315f89c84e8",
+  "key": "907fdd6d660ecf396964f6e2f41c6fd20fec41298fba4da3fb5c9fcb4e12e8dc",
   "model": "gpt-4.1-mini",
   "temperature": 0.0,
   "schema": "ConstraintSet",
-  "source": "synthetic",
-  "provider": "none",
-  "recorded_at": "2026-11-23T19:19:24.684201+00:00",
+  "source": "live",
+  "provider": "openrouter",
+  "recorded_at": "2026-11-23T19:43:03.851112+00:00",
   "messages": [
     {
       "role": "system",
@@ -13,10 +13,10 @@
     },
     {
       "role": "user",
-      "content": "clean_text: Leave Union Station at 11 pm and get me to Pearson Airport by 1.\nclassification: {\"route_action\":\"plan\",\"primary_mode\":\"car\",\"needs_live_data\":true,\"clarify_field\":\"none\",\"refusal_reason\":\"none\"}\nknown: null"
+      "content": "clean_text: Leave Union Station at 11 pm and get me to Pearson Airport by 1 am.\nclassification: {\"route_action\":\"plan\",\"primary_mode\":\"car\",\"needs_live_data\":true,\"clarify_field\":\"none\",\"refusal_reason\":\"none\"}\nknown: null"
     }
   ],
-  "text": "{\"origin\":\"Union Station\",\"destination\":\"Pearson Airport\",\"stops\":[],\"mode\":\"car\",\"modes_to_compare\":[],\"compare_threshold_min\":null,\"avoid\":[],\"prefer\":[],\"minimize_elevation\":false,\"check_closures\":false,\"max_duration_min\":null,\"max_distance_km\":null,\"loop\":false,\"target_distance_km\":null,\"depart_at\":\"23:00\",\"arrive_by\":\"01:00\",\"required_accessibility\":false,\"ambiguities\":[],\"missing_field\":null,\"too_many_stops\":false}",
-  "tokens_in": 0,
-  "tokens_out": 0
+  "text": "{\"origin\": \"Union Station\", \"destination\": \"Pearson Airport\", \"stops\": [], \"mode\": \"car\", \"modes_to_compare\": [], \"compare_threshold_min\": null, \"avoid\": [], \"prefer\": [], \"minimize_elevation\": false, \"check_closures\": false, \"max_duration_min\": null, \"max_distance_km\": null, \"loop\": false, \"target_distance_km\": null, \"depart_at\": \"23:00\", \"arrive_by\": \"01:00\", \"required_accessibility\": false, \"ambiguities\": [], \"missing_field\": null, \"too_many_stops\": false}",
+  "tokens_in": 3506,
+  "tokens_out": 138
 }
