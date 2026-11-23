@@ -168,7 +168,7 @@ def _fake_invoke(monkeypatch, actions: list[str]) -> list[dict]:
                 approved=True, text="ok", route_geojson=None, stops=[], used_fallback_template=False
             ),
         }
-        if action == "plan":
+        if action in {"plan", "clarify"}:
             state["constraints"] = running_constraints()
         return state
 
@@ -196,6 +196,8 @@ def test_a_follow_up_answer_is_sent_with_the_message_it_answers(monkeypatch):
         "bike to the ROM please. From Union Station",
         "skip the stop",
     ]
+    # The half-read trip on a clarify is not kept as the known trip.
+    assert sent[1]["known"] is None and sent[1]["turn_index"] == 0
     # The thread shows what the user typed, not the joined text.
     assert [m.markdown[0].value for m in app.chat_message][2] == "From Union Station"
 

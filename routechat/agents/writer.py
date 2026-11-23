@@ -29,11 +29,12 @@ from routechat.agents.templates import (
     too_many_stops_text,
 )
 from routechat.config import get_settings
+from routechat.evidence import tidy_evidence
 from routechat.llm import api_calls_for, complete
 from routechat.logging import stage_line, token_cost
 from routechat.schemas import ReplyDraft
 
-_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "writer_v1.md"
+_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "writer_v2.md"
 PROMPT_VERSION = _PROMPT_PATH.stem
 _EARLY_GUARD = frozenset({"clarify", "refuse", "fixed_reply"})
 _EARLY_ACTIONS = frozenset({"refuse", "escalate", "clarify"})
@@ -221,6 +222,22 @@ def _sponsored_facts(report: Any) -> dict[str, Any] | None:
     }
 
 
+def _other_route_facts(state: dict[str, Any], chosen: Any) -> dict[str, Any] | None:
+    """The route a compare request also measured, for one sentence about it."""
+    for candidate in state.get("candidates") or []:
+        if candidate is chosen or _field(candidate, "error"):
+            continue
+        traffic_s = _field(candidate, "duration_traffic_s")
+        return {
+            "mode": _field(candidate, "mode"),
+            "distance_km": _round_km(_field(candidate, "distance_m")),
+            "duration_min": _round_minutes(
+                traffic_s if traffic_s is not None else _field(candidate, "duration_s")
+            ),
+        }
+    return None
+
+
 def build_facts(state: dict[str, Any]) -> dict[str, Any]:
     """Rounded facts for the model. The raw utterance is not copied in.
 
@@ -237,7 +254,7 @@ def build_facts(state: dict[str, Any]) -> dict[str, Any]:
         {
             "id": _field(check, "id"),
             "status": _field(check, "status"),
-            "evidence": _field(check, "evidence"),
+            "evidence": tidy_evidence(_field(check, "evidence")),
         }
         for check in _field(report, "checks")
     ]
@@ -251,6 +268,7 @@ def build_facts(state: dict[str, Any]) -> dict[str, Any]:
         "checks": checks,
         "must_mention": list(_field(report, "must_mention")),
         "sponsored": _sponsored_facts(report),
+        "other_route": _other_route_facts(state, candidate),
     }
 
 

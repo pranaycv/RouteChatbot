@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 
 from routechat.classifier.predict import adapter_dir
 from routechat.config import get_settings
+from routechat.evidence import tidy_evidence
 from routechat.graph import invoke
 from routechat.logging import append_handoff, mask_for_log, read_handoffs
 from routechat.stubs import RUNNING_UTTERANCE
@@ -585,9 +586,10 @@ def _ask(utterance: str) -> None:
     st.session_state.history.append({"role": "user", "content": utterance})
     st.session_state.history.append({"role": "assistant", "content": answer})
     constraints = state.get("constraints")
-    if constraints is not None:
-        st.session_state.known = constraints
     action = _field(state.get("classification"), "route_action")
+    # A clarify may carry a half-read trip. The pending message is what the answer is joined to.
+    if constraints is not None and action != "clarify":
+        st.session_state.known = constraints
     asked_before = st.session_state.clarify_count > 0
     if action == "clarify":
         st.session_state.clarify_count += 1
@@ -629,6 +631,12 @@ def _view(coords: list[list[float]]) -> pdk.ViewState:
 def _pretty_id(raw: str) -> str:
     parts = str(raw).replace("_", " ").split(":")
     return " · ".join(part.strip().title() for part in parts if part.strip())
+
+
+def _words(raw: str) -> str:
+    """fuel_or_charging as Fuel or charging."""
+    text = raw.replace("_", " ").strip()
+    return text[:1].upper() + text[1:]
 
 
 def _sponsor_label_layer(sponsors: list[Any]) -> pdk.Layer:
@@ -920,7 +928,7 @@ def _checks(state: dict[str, Any]) -> None:
             f"<span class='rc-pip {escape(status)}'></span>"
             "<div>"
             f"<b>{escape(_pretty_id(str(_field(check, 'id') or '')))}</b>"
-            f"<p>{escape(str(_field(check, 'evidence') or ''))}</p>"
+            f"<p>{escape(tidy_evidence(str(_field(check, 'evidence') or '')))}</p>"
             "</div>"
             f"<span class='rc-badge {escape(status)}'>{escape(status)}</span>"
             "</div>"
@@ -931,7 +939,7 @@ def _checks(state: dict[str, Any]) -> None:
         detail = " · ".join(
             part
             for part in (
-                str(_field(sponsored, "category") or "Place"),
+                _words(str(_field(sponsored, "category") or "Place")),
                 f"rating {_field(sponsored, 'rating')}",
                 away,
             )
@@ -970,7 +978,7 @@ def _support() -> None:
         blocks.append(
             "<div class='rc-ticket'>"
             f"<div class='rc-kicker'>{escape(str(ticket.get('request_id', '')))}</div>"
-            f"<b>{escape(str(reason))}</b>"
+            f"<b>{escape(_words(str(reason)))}</b>"
             f"<p>{escape(str(text))}</p>"
             "</div>"
         )
