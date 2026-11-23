@@ -1,0 +1,82 @@
+[
+  {
+    "model": "google/gemini-2.5-flash-lite",
+    "temperature": 0.7,
+    "n": 323,
+    "distinct_1": 0.175,
+    "distinct_2": 0.511,
+    "mean_pairwise_sim": 0.068
+  },
+  {
+    "model": "google/gemini-2.5-flash-lite",
+    "temperature": 1.0,
+    "n": 316,
+    "distinct_1": 0.184,
+    "distinct_2": 0.539,
+    "mean_pairwise_sim": 0.066
+  },
+  {
+    "model": "google/gemini-2.5-flash-lite",
+    "temperature": 1.2,
+    "n": 310,
+    "distinct_1": 0.196,
+    "distinct_2": 0.574,
+    "mean_pairwise_sim": 0.062
+  },
+  {
+    "model": "meta-llama/llama-3.3-70b-instruct",
+    "temperature": 0.7,
+    "n": 320,
+    "distinct_1": 0.185,
+    "distinct_2": 0.533,
+    "mean_pairwise_sim": 0.054
+  },
+  {
+    "model": "meta-llama/llama-3.3-70b-instruct",
+    "temperature": 1.0,
+    "n": 322,
+    "distinct_1": 0.187,
+    "distinct_2": 0.543,
+    "mean_pairwise_sim": 0.052
+  },
+  {
+    "model": "meta-llama/llama-3.3-70b-instruct",
+    "temperature": 1.2,
+    "n": 319,
+    "distinct_1": 0.188,
+    "distinct_2": 0.538,
+    "mean_pairwise_sim": 0.053
+  },
+  {
+    "model": "openai/gpt-4o-mini",
+    "temperature": 0.7,
+    "n": 315,
+    "distinct_1": 0.164,
+    "distinct_2": 0.479,
+    "mean_pairwise_sim": 0.077
+  },
+  {
+    "model": "openai/gpt-4o-mini",
+    "temperature": 1.0,
+    "n": 325,
+    "distinct_1": 0.161,
+    "distinct_2": 0.481,
+    "mean_pairwise_sim": 0.077
+  },
+  {
+    "model": "openai/gpt-4o-mini",
+    "temperature": 1.2,
+    "n": 320,
+    "distinct_1": 0.166,
+    "distinct_2": 0.508,
+    "mean_pairwise_sim": 0.077
+  },
+  {
+    "model": "ALL",
+    "temperature": "ALL",
+    "n": 2870,
+    "distinct_1": 0.065,
+    "distinct_2": 0.296,
+    "mean_pairwise_sim": 0.061
+  }
+]
