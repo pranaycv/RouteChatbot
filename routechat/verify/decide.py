@@ -230,7 +230,8 @@ def verify_node(state):
     if not passing and state.get("revision_count", 0) == 0:
         revisable = [
             (option, results) for option, results in evaluated
-            if any(result.status == "unmet" for result in results)
+            if option.provider != "graphhopper"
+            and any(result.status == "unmet" for result in results)
             and all(
                 result.id in _REVISABLE
                 for result in results
@@ -243,7 +244,12 @@ def verify_node(state):
 
     if not passing:
         return _handoff(state, constraints, "requirements_not_met", route, checks)
-    if failures and failures <= _REVISABLE and state.get("revision_count", 0) == 0:
+    if (
+        route.provider != "graphhopper"
+        and failures
+        and failures <= _REVISABLE
+        and state.get("revision_count", 0) == 0
+    ):
         return {"report": _report("revise", route, checks), "revision_count": 1}
 
     report = _report("accept", route, checks)
@@ -251,18 +257,11 @@ def verify_node(state):
     text = GuardResult.model_validate(guard).clean_text if guard is not None else ""
     departure = _minutes(constraints.depart_at)
     arrival = _minutes(constraints.arrive_by)
-    # Use explicit leisure and daytime signals while the shared schema has no trip purpose field.
-    leisure = bool(re.search(r"\b(leisure|recreational|sightseeing|for fun)\b", text, re.I))
-    evening = bool(re.search(r"\b(evening|night|tonight|dusk|sunset)\b", text, re.I))
-    daylight = departure is not None and 6 * 60 <= departure < 18 * 60
-    if arrival is not None:
-        daylight = daylight and departure <= arrival < 18 * 60
-    elif daylight:
-        duration = _duration(route)
-        daylight = duration is not None and departure + duration / 60 < 18 * 60
+    evening = any(time is not None and time > 18 * 60 for time in (departure, arrival))
+    evening = evening or bool(re.search(r"\b(evening|night|tonight)\b", text, re.I))
     report.sponsored = select_sponsor(
         report, route, constraints, route_action=classification.route_action,
-        is_leisure=leisure, is_evening=evening or not daylight,
+        is_evening=evening,
         is_safety_trip=classification.needs_live_data,
     )
     return {"report": report, "handoff": None}

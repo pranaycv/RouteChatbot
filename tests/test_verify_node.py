@@ -207,3 +207,36 @@ def test_soft_flatness_failure_is_disclosed_after_retry():
     report = verify_node(state | {"revision_count": 1})["report"]
     assert report.decision == "accept"
     assert report.must_mention == ["flat"]
+
+
+@pytest.mark.parametrize(
+    ("departure", "text", "eligible"),
+    [
+        (None, "Plan a run downtown", True),
+        ("18:00", "Plan a run downtown", True),
+        ("18:01", "Plan a run downtown", False),
+        (None, "Plan a run tonight", False),
+        (None, "Plan a run at night", False),
+    ],
+)
+def test_sponsor_evening_exclusion(departure, text, eligible):
+    state = _state(depart_at=departure)
+    state["guard"] = state["guard"].model_copy(update={"clean_text": text})
+    assert (verify_node(state)["report"].sponsored is not None) == eligible
+
+
+def test_graphhopper_standard_does_not_retry_identical_request():
+    state = _state(avoid=["highways"])
+    route = state["candidates"][0]
+    state["candidates"] = [route.model_copy(update={"provider": "graphhopper"})]
+    report = verify_node(state)["report"]
+    assert report.decision == "handoff"
+    assert report.must_mention == ["avoid:highways"]
+
+    state = _state(minimize_elevation=True)
+    state["candidates"] = [route.model_copy(update={
+        "provider": "graphhopper", "ascend_m": 30, "distance_m": 1000,
+    })]
+    report = verify_node(state)["report"]
+    assert report.decision == "accept"
+    assert report.must_mention == ["flat"]

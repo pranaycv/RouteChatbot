@@ -1,4 +1,4 @@
-"""T-5-16: optional sponsor selection on accepted leisure routes."""
+"""T-5-16: optional sponsor selection on eligible accepted routes."""
 
 import json
 
@@ -40,7 +40,6 @@ def test_t_5_16_sponsored_suggestion(tmp_path):
         "route": route,
         "constraints": constraints,
         "route_action": "plan",
-        "is_leisure": True,
         "is_evening": False,
         "is_safety_trip": False,
         "data_path": path,
@@ -57,7 +56,6 @@ def test_t_5_16_sponsored_suggestion(tmp_path):
         {"route": route.model_copy(update={"geometry": None})},
         {"constraints": constraints.model_copy(update={"required_accessibility": True})},
         {"route_action": "compare_modes"},
-        {"is_leisure": False},
         {"is_evening": True},
         {"is_safety_trip": True},
         {"data_path": tmp_path / "missing.json"},

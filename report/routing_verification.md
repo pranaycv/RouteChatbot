@@ -4,9 +4,9 @@
 
 WP4 uses Mapbox to resolve named places and GraphHopper to generate route geometry and
 measurements. It ranks stop matches by straight-line detour and orders up to three stops
-while preserving user-specified relative order. A revision reuses the resolved places
-and applies stricter configured GraphHopper weights. WP5 checks the resulting candidates
-and either accepts one, requests one revision, or creates a handoff ticket. A sponsor
+while preserving user-specified relative order. The pilot uses GraphHopper Standard.
+WP5 checks the candidate that would be displayed and accepts or hands off. It skips
+a revision for GraphHopper Standard because the request would be identical. A sponsor
 is attached to the report after an eligible acceptance. The selected route and its stops
 do not change.
 
@@ -24,7 +24,7 @@ do not change.
 | Highway requirement remains unmet after retry | Handoff with the highway check | T-5-14 and cross-stage graph smoke test |
 | Flatness preference remains unmet after retry | Accept with a disclosure | `test_soft_flatness_failure_is_disclosed_after_retry` |
 | Accessibility cannot be verified | Handoff with a step-free disclosure | T-5-15 |
-| Eligible leisure acceptance | Attach at most one qualifying sponsor without adding a stop | T-5-16 and writer/output-guard smoke test |
+| Eligible acceptance | Attach at most one qualifying sponsor without adding a stop | T-5-16 and writer/output-guard smoke test |
 | Comparable route modes | Prefer the requested mode within the time threshold | `test_compare_prefers_requested_mode_within_threshold` |
 
 The final Windows checkout passed all 158 tests in offline replay mode. The
@@ -47,8 +47,7 @@ context corrected the selected origin.
 The low-climb custom-model request returned HTTP 400 with GraphHopper's message
 that free packages cannot use flexible mode. WP4 reports this rejection as
 `flexible_mode_unavailable`. Standard routing works with the same credentials.
-The project still needs a decision on flexible-mode access or a verifier-checked
-baseline route when custom models are unavailable.
+The pilot now sends Standard requests and verifies the route returned.
 
 Recording and replay reproduced the 2734.779 m point-to-point candidate
 exactly. The live round-trip request returned a closed 4186.675 m loop in
@@ -65,8 +64,10 @@ The broader evaluation and 50-route manual inspection are pending.
   provider hours. The candidate contract also lacks verified accessibility and lighting.
 - The browser-location example requires an app-to-maps coordinate contract. The current
   map stage accepts named origins only. The country setting follows the shared config.
-- Sponsor selection uses explicit leisure wording and a trip window within 06:00–18:00.
-  The team needs to agree on the final trip-purpose and time signals.
+- Sponsors are eligible on accepted routes unless the request is accessibility-related,
+  safety-related, a mode comparison, or explicitly in the evening. An omitted time
+  leaves a route eligible. A provided time after 18:00 or evening/night wording
+  disqualifies it.
 
 For a live run, use approved provider access to record evaluation responses and capture
 calls, latency, and errors by API. On the evaluation set, compare resolved points with

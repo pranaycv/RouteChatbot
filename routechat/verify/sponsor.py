@@ -1,4 +1,4 @@
-"""Optional sponsored suggestions for accepted leisure routes."""
+"""Optional sponsored suggestions for eligible accepted routes."""
 
 import json
 from math import cos, hypot, radians
@@ -56,7 +56,6 @@ def select_sponsor(
     constraints: ConstraintSet,
     *,
     route_action: RouteAction,
-    is_leisure: bool,
     is_evening: bool,
     is_safety_trip: bool,
     data_path: Path = ROOT / "data" / "sponsors.json",
@@ -65,7 +64,6 @@ def select_sponsor(
     if (
         report.decision != "accept"
         or report.chosen_route != route.id
-        or not is_leisure
         or is_evening
         or is_safety_trip
         or constraints.required_accessibility
