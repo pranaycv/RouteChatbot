@@ -102,14 +102,26 @@ def main() -> None:
     parser.add_argument("--run", type=Path, required=True, help="training output directory with checkpoint-*/")
     parser.add_argument("--val", type=Path, required=True)
     parser.add_argument("--copy-to", type=Path, default=None, help="copy the best checkpoint here (the adapter WP2 loads)")
+    parser.add_argument(
+        "--top-k", type=int, default=3,
+        help="shortlist this many checkpoints by eval loss (from train_log.json) plus the final one before generating; 0 = all",
+    )
     args = parser.parse_args()
 
     val = load_val(args.val)
     checkpoints = sorted(args.run.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[-1]))
+    if not checkpoints and not (args.run / "final").exists():
+        sys.exit(f"no checkpoints under {args.run}")
+    if args.top_k and (args.run / "train_log.json").exists() and len(checkpoints) > args.top_k:
+        # Generation on 199 records takes minutes per checkpoint, so shortlist by eval loss first.
+        log = json.loads((args.run / "train_log.json").read_text(encoding="utf-8"))
+        loss_by_step = {int(e["step"]): e["eval_loss"] for e in log if "eval_loss" in e}
+        ranked = sorted(checkpoints, key=lambda p: loss_by_step.get(int(p.name.split("-")[-1]), float("inf")))
+        keep = ranked[: args.top_k]
+        print("shortlist by eval loss:", ", ".join(f"{p.name} ({loss_by_step.get(int(p.name.split('-')[-1]), float('nan')):.4f})" for p in keep))
+        checkpoints = sorted(keep, key=lambda p: int(p.name.split("-")[-1]))
     if (args.run / "final").exists():
         checkpoints.append(args.run / "final")
-    if not checkpoints:
-        sys.exit(f"no checkpoints under {args.run}")
 
     results = {}
     for ckpt in checkpoints:

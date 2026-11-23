@@ -66,8 +66,11 @@ def test_handbook_settings_are_in_config():
     cfg = load_ft_config()
     assert cfg["lora"] == {"r": 16, "lora_alpha": 32, "lora_dropout": 0.05, "target_modules": "all-linear", "task_type": "CAUSAL_LM"}
     sft = cfg["sft"]
-    assert (sft["num_train_epochs"], sft["per_device_train_batch_size"], sft["gradient_accumulation_steps"]) == (3, 4, 2)
-    assert (sft["learning_rate"], sft["lr_scheduler_type"], sft["warmup_ratio"], sft["max_length"]) == (2e-4, "cosine", 0.05, 512)
+    # Effective batch 8 as the handbook (4 x 2), split 2 x 4 for ~1,500-token records; max_length 2048
+    # because the label guide alone is 1,430 tokens and the handbook's 512 would drop every completion.
+    assert sft["num_train_epochs"] == 3
+    assert sft["per_device_train_batch_size"] * sft["gradient_accumulation_steps"] == 8
+    assert (sft["learning_rate"], sft["lr_scheduler_type"], sft["warmup_ratio"], sft["max_length"]) == (2e-4, "cosine", 0.05, 2048)
     assert sft["fp16"] is True and sft["eval_steps"] == 50 and sft["save_steps"] == 50 and cfg["seed"] == 42
     assert cfg["sweep"] == {"r": [8, 16], "learning_rate": [1e-4, 2e-4]}
     assert cfg["learning_curve"]["sizes"] == [200, 400, 800, 1600]
