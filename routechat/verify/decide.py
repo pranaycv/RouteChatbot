@@ -231,6 +231,10 @@ def _verify(state):
     ]
     if not evaluated:
         reason = next((route.error for route in routes if route.error), "no_route")
+        if reason == "transit_not_supported":
+            return {"report": _report("refuse", reason=reason), "handoff": None}
+        if reason == "place_not_found":
+            return {"report": _report("clarify", reason=reason), "handoff": None}
         if reason == "mode_not_supported":
             mode = next(route.mode for route in routes if route.error == reason)
             if mode in {"unspecified", "hike", "multimodal"}:

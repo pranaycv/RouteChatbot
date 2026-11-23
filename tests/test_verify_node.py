@@ -280,3 +280,28 @@ def test_verify_node_logs_one_stage_line(monkeypatch, constraints, decision):
     (stage, request_id, logged_decision, duration_ms), = calls
     assert (stage, request_id, logged_decision) == ("verify", "request-1", decision)
     assert duration_ms >= 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "reason", "decision"),
+    [
+        ("transit", "transit_not_supported", "refuse"),
+        ("walk", "place_not_found", "clarify"),
+    ],
+)
+def test_map_error_gets_direct_reply_without_ticket(mode, reason, decision):
+    from routechat.agents.templates import TRANSIT_NOT_SUPPORTED, place_not_found_text
+    from routechat.agents.writer import template_message
+    from routechat.logging import request_outcome
+
+    state = _state(mode=mode, origin="Unknown place")
+    state["candidates"] = [RouteCandidate(
+        id="unavailable", provider="graphhopper", mode=mode, error=reason,
+    )]
+    state.update(verify_node(state))
+    expected = TRANSIT_NOT_SUPPORTED if mode == "transit" else place_not_found_text("Unknown place")
+
+    assert state["handoff"] is None
+    assert state["report"].decision == decision
+    assert template_message(state) == expected
+    assert request_outcome(state) == decision
