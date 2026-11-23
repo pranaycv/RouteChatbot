@@ -27,10 +27,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential_jitter
+
 from routechat.config import ROOT, get_settings
 
 FIXTURE_DIR = ROOT / "routechat" / "fixtures" / "llm"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+_RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+_RETRYABLE_NAMES = {
+    "APIConnectionError", "APITimeoutError", "RateLimitError", "InternalServerError",
+    "ServiceUnavailableError", "ConnectError", "ReadTimeout", "ReadError", "RemoteProtocolError",
+}
+logger = logging.getLogger("routechat.llm")
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Rate limits, timeouts and provider 5xx are retried. Auth, bad-request and schema errors are not."""
+    status = getattr(exc, "status_code", None)
+    if status in _RETRYABLE_STATUS:
+        return True
+    return type(exc).__name__ in _RETRYABLE_NAMES
 
 Message = dict[str, str]  # {"role": "system" | "user" | "assistant", "content": str}
 
@@ -87,10 +103,24 @@ def provider_and_client_kwargs() -> tuple[str, dict[str, Any]]:
     raise LLMNoKey("set OPENAI_API_KEY or OPENROUTER_API_KEY in .env, or run with FIXTURES=replay")
 
 
+@retry(
+    stop=stop_after_attempt(6),
+    wait=wait_exponential_jitter(initial=2, max=60),
+    retry=retry_if_exception(_is_transient),
+    before_sleep=lambda state: logger.warning(
+        '{"event": "llm_retry", "attempt": %d, "error": "%s"}', state.attempt_number, type(state.outcome.exception()).__name__
+    ),
+    reraise=True,
+)
 def _live_call(
     messages: list[Message], model: str, temperature: float, max_tokens: int | None, schema: type | None
 ) -> tuple[str, int, int, str]:
-    """One network call through langchain-openai. Returns (text, tokens_in, tokens_out, provider)."""
+    """One network call through langchain-openai, retried with backoff on transient errors.
+
+    Returns (text, tokens_in, tokens_out, provider). A 429 burst from the provider is the common
+    case: up to six attempts, 2 s to 60 s apart, so an evaluation run over hundreds of records
+    does not lose rows to a one-minute rate limit.
+    """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
@@ -132,13 +162,14 @@ def complete(
             )
         rec = json.loads(path.read_text(encoding="utf-8"))
         tokens_in, tokens_out = int(rec.get("tokens_in", 0)), int(rec.get("tokens_out", 0))
-        return LLMResult(rec["text"], tokens_in, tokens_out, model, "replay", 0.0, cost_usd(model, tokens_in, tokens_out))
+        # The latency recorded at call time is returned, so a replayed run reports real model latency.
+        return LLMResult(rec["text"], tokens_in, tokens_out, model, "replay", float(rec.get("latency_ms", 0.0)), cost_usd(model, tokens_in, tokens_out))
 
     started = time.perf_counter()
     text, tokens_in, tokens_out, provider = _live_call(messages, model, temperature, max_tokens, schema)
     latency_ms = round((time.perf_counter() - started) * 1000, 3)
     if mode == "record":
-        write_fixture(messages, model, temperature, schema_name, text, tokens_in, tokens_out, source="live", provider=provider)
+        write_fixture(messages, model, temperature, schema_name, text, tokens_in, tokens_out, source="live", provider=provider, latency_ms=latency_ms)
     return LLMResult(text, tokens_in, tokens_out, model, provider, latency_ms, cost_usd(model, tokens_in, tokens_out))
 
 
@@ -152,6 +183,7 @@ def write_fixture(
     tokens_out: int = 0,
     source: str = "synthetic",
     provider: str = "none",
+    latency_ms: float = 0.0,
 ) -> Path:
     """Write one replay fixture. source is "live" from a real call or "synthetic" when seeded by hand."""
     key = fixture_key(model, temperature, messages, schema_name)
@@ -165,6 +197,7 @@ def write_fixture(
         "source": source,
         "provider": provider,
         "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "latency_ms": latency_ms,
         "messages": messages,
         "text": text,
         "tokens_in": tokens_in,
