@@ -75,6 +75,8 @@ def main() -> None:
     df = pd.DataFrame(results)
     if out.exists():
         old = pd.read_csv(out)
+        if "prompt_version" not in old.columns:  # rows written before the column existed were label guide v2
+            old.insert(1, "prompt_version", "label_guide_v2")
         keys = set(zip(df.backend, df.prompt_version))
         old = old[[k not in keys for k in zip(old.backend, old.prompt_version)]]
         df = pd.concat([old, df], ignore_index=True)
