@@ -90,9 +90,16 @@ def train(args: argparse.Namespace) -> dict:
     if args.subset is not None:
         data["train"] = data["train"].shuffle(seed=cfg["seed"]).select(range(min(args.subset, len(data["train"]))))
     tokenizer = AutoTokenizer.from_pretrained(settings["base_model"])
-    # Base weights stay fp32; SFTConfig(fp16=True) runs mixed precision. A fp16 base with fp16 LoRA
-    # parameters trips the gradient scaler ("attempting to unscale FP16 gradients"), fp32 does not.
-    model = AutoModelForCausalLM.from_pretrained(settings["base_model"])
+    if args.bf16:
+        # Ampere or newer GPU (e.g. an RTX 3080): bf16 base weights and bf16 mixed precision need no
+        # gradient scaler and halve the memory of the fp32 path. Kaggle's T4 has no bf16; it takes the path below.
+        model = AutoModelForCausalLM.from_pretrained(settings["base_model"], dtype=torch.bfloat16)
+        settings["sft"]["fp16"] = False
+        settings["sft"]["bf16"] = True
+    else:
+        # Base weights stay fp32; SFTConfig(fp16=True) runs mixed precision. A fp16 base with fp16 LoRA
+        # parameters trips the gradient scaler ("attempting to unscale FP16 gradients"), fp32 does not.
+        model = AutoModelForCausalLM.from_pretrained(settings["base_model"])
     lora = LoraConfig(**settings["lora"])
     sft = SFTConfig(output_dir=str(args.out), **settings["sft"])
     trainer = SFTTrainer(model=model, args=sft, train_dataset=data["train"], eval_dataset=data["validation"], processing_class=tokenizer, peft_config=lora)
@@ -129,6 +136,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=float, default=None)
     parser.add_argument("--subset", type=int, default=None, help="train on the first N shuffled records (learning curve)")
     parser.add_argument("--dry-run", action="store_true", help="print the effective settings and record counts, no training")
+    parser.add_argument("--bf16", action="store_true", help="bf16 weights and mixed precision for an Ampere or newer GPU; the T4 path is fp32 weights with fp16")
     train(parser.parse_args())
 
 

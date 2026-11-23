@@ -72,14 +72,17 @@ class LLMResult:
     cost_usd: float
 
 
-def fixture_key(model: str, temperature: float, messages: list[Message], schema_name: str | None) -> str:
-    """Stable key for one call. Any change to the prompt text changes the key, on purpose."""
-    payload = json.dumps(
-        {"model": model, "temperature": temperature, "messages": messages, "schema": schema_name},
-        sort_keys=True,
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+def fixture_key(
+    model: str, temperature: float, messages: list[Message], schema_name: str | None, reasoning_effort: str | None = None
+) -> str:
+    """Stable key for one call. Any change to the prompt text changes the key, on purpose.
+
+    reasoning_effort joins the key only when set, so every fixture recorded before it existed keeps its key.
+    """
+    payload: dict[str, Any] = {"model": model, "temperature": temperature, "messages": messages, "schema": schema_name}
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def fixture_path(key: str) -> Path:
@@ -115,20 +118,29 @@ def provider_and_client_kwargs() -> tuple[str, dict[str, Any]]:
     reraise=True,
 )
 def _live_call(
-    messages: list[Message], model: str, temperature: float, max_tokens: int | None, schema: type | None
+    messages: list[Message],
+    model: str,
+    temperature: float,
+    max_tokens: int | None,
+    schema: type | None,
+    reasoning_effort: str | None = None,
 ) -> tuple[str, int, int, str]:
     """One network call through langchain-openai, retried with backoff on transient errors.
 
     Returns (text, tokens_in, tokens_out, provider). A 429 burst from the provider is the common
     case: up to six attempts, 2 s to 60 s apart, so an evaluation run over hundreds of records
-    does not lose rows to a one-minute rate limit.
+    does not lose rows to a one-minute rate limit. A reasoning model takes reasoning_effort
+    (low, medium, high) and no temperature, which those models reject.
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
     provider, kwargs = provider_and_client_kwargs()
     model_name = f"openai/{model}" if provider == "openrouter" and "/" not in model else model
-    llm = ChatOpenAI(model=model_name, temperature=temperature, max_tokens=max_tokens, **kwargs)
+    if reasoning_effort:
+        llm = ChatOpenAI(model=model_name, reasoning_effort=reasoning_effort, max_tokens=max_tokens, **kwargs)
+    else:
+        llm = ChatOpenAI(model=model_name, temperature=temperature, max_tokens=max_tokens, **kwargs)
     roles = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
     lc_messages = [roles[m["role"]](content=m["content"]) for m in messages]
     if schema is not None:
@@ -149,11 +161,12 @@ def complete(
     temperature: float = 0.0,
     max_tokens: int | None = None,
     schema: type | None = None,
+    reasoning_effort: str | None = None,
 ) -> LLMResult:
-    """Send one chat completion, honouring FIXTURES=record|replay."""
+    """Send one chat completion, honouring FIXTURES=record|replay|refresh."""
     mode = os.environ.get("FIXTURES", "").strip().lower()
     schema_name = getattr(schema, "__name__", None) if schema is not None else None
-    key = fixture_key(model, temperature, messages, schema_name)
+    key = fixture_key(model, temperature, messages, schema_name, reasoning_effort)
     path = fixture_path(key)
 
     # replay: recorded only.  record: recorded if present, else live and saved (a rerun never pays twice).
@@ -170,10 +183,13 @@ def complete(
         return LLMResult(rec["text"], tokens_in, tokens_out, model, "replay", float(rec.get("latency_ms", 0.0)), cost_usd(model, tokens_in, tokens_out))
 
     started = time.perf_counter()
-    text, tokens_in, tokens_out, provider = _live_call(messages, model, temperature, max_tokens, schema)
+    text, tokens_in, tokens_out, provider = _live_call(messages, model, temperature, max_tokens, schema, reasoning_effort)
     latency_ms = round((time.perf_counter() - started) * 1000, 3)
     if mode in ("record", "refresh"):
-        write_fixture(messages, model, temperature, schema_name, text, tokens_in, tokens_out, source="live", provider=provider, latency_ms=latency_ms)
+        write_fixture(
+            messages, model, temperature, schema_name, text, tokens_in, tokens_out,
+            source="live", provider=provider, latency_ms=latency_ms, reasoning_effort=reasoning_effort,
+        )
     return LLMResult(text, tokens_in, tokens_out, model, provider, latency_ms, cost_usd(model, tokens_in, tokens_out))
 
 
@@ -188,15 +204,17 @@ def write_fixture(
     source: str = "synthetic",
     provider: str = "none",
     latency_ms: float = 0.0,
+    reasoning_effort: str | None = None,
 ) -> Path:
     """Write one replay fixture. source is "live" from a real call or "synthetic" when seeded by hand."""
-    key = fixture_key(model, temperature, messages, schema_name)
+    key = fixture_key(model, temperature, messages, schema_name, reasoning_effort)
     path = fixture_path(key)
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
     record = {
         "key": key,
         "model": model,
         "temperature": temperature,
+        "reasoning_effort": reasoning_effort,
         "schema": schema_name,
         "source": source,
         "provider": provider,
