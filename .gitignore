@@ -19,5 +19,10 @@ eval/results/
 # Runtime handoff queue (WP7).
 data/handoff_queue.jsonl
 
-# ignore pilot runs (WP8)
+# ignore data and pilot runs (WP8)
 data/d1_pilot*/
+data/d2_pilot/
+data/d3_pilot/
+data/d1/raw.jsonl
+data/d1/rejected.jsonl
+data/d1/jobs.jsonl

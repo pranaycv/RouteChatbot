@@ -1,0 +1,240 @@
+{
+  "created": "2026-11-23T12:41:37+00:00",
+  "frozen_at": "2026-11-23T15:25:07+00:00",
+  "generate": {
+    "budget_stopped": false,
+    "cost_usd": 0.7334,
+    "coverage": {
+      "difficulty": {
+        "adversarial": 599,
+        "easy": 1506,
+        "hard": 895
+      },
+      "persona": {
+        "angry_user": 303,
+        "commuter": 279,
+        "ev_driver": 155,
+        "non_native_english": 231,
+        "parent_with_kids": 233,
+        "polite_older_user": 257,
+        "runner": 304,
+        "safety_cyclist": 216,
+        "terse_phone_typer": 171,
+        "tourist": 411,
+        "wheelchair_user": 200,
+        "young_user": 240
+      },
+      "primary_mode": {
+        "bike": 598,
+        "car": 598,
+        "hike": 331,
+        "multimodal": 270,
+        "run": 272,
+        "unspecified": 421,
+        "walk": 510
+      },
+      "refusal_reason": {
+        "booking_or_payment": 60,
+        "data_request": 59,
+        "live_parking_or_inventory": 60,
+        "none": 2554,
+        "out_of_scope_b2b": 88,
+        "out_of_scope_mode": 90,
+        "prompt_injection": 61,
+        "unsafe_or_illegal": 28
+      },
+      "route_action": {
+        "clarify": 457,
+        "compare_modes": 298,
+        "escalate": 301,
+        "lookup_only": 301,
+        "plan": 899,
+        "refuse": 446,
+        "replan": 298
+      },
+      "turn": {
+        "0": 2553,
+        "1": 447
+      },
+      "type": {
+        "benign_override_wording": 66,
+        "benign_privacy_wording": 72,
+        "clean": 1506,
+        "conflicting_info": 51,
+        "dangerous_driving": 9,
+        "demands_guarantee": 38,
+        "dev_mode_roleplay": 6,
+        "disguised_fleet": 13,
+        "embedded_in_request": 11,
+        "evade_police": 8,
+        "fake_authorisation": 8,
+        "fake_system_block": 12,
+        "fake_system_message": 15,
+        "fragmented": 177,
+        "home_address_inference": 16,
+        "implied_mode": 104,
+        "incidental_transit_mention": 61,
+        "instruction_override": 11,
+        "logs_or_prompt_dump": 22,
+        "mentions_rules": 72,
+        "mode_threshold": 25,
+        "multi_task": 147,
+        "other_users_trips": 17,
+        "policy_pressure": 62,
+        "pressure_to_book": 12,
+        "pushy_but_valid": 59,
+        "rambling": 116,
+        "soft_only": 29,
+        "subtle_authority_note": 6,
+        "threat_to_complain": 40,
+        "tour_operator": 17,
+        "trespass_or_closed_area": 7,
+        "unusual_format": 97,
+        "vague_place": 88
+      },
+      "use_case_id": {
+        "0": 148,
+        "1": 283,
+        "10": 45,
+        "11": 47,
+        "12": 15,
+        "13": 84,
+        "14": 23,
+        "15": 50,
+        "16": 111,
+        "17": 46,
+        "18": 45,
+        "19": 224,
+        "2": 171,
+        "20": 22,
+        "21": 144,
+        "22": 47,
+        "23": 56,
+        "24": 46,
+        "25": 45,
+        "26": 16,
+        "27": 43,
+        "28": 38,
+        "29": 38,
+        "3": 116,
+        "30": 270,
+        "4": 223,
+        "5": 75,
+        "6": 93,
+        "7": 373,
+        "8": 37,
+        "9": 26
+      }
+    },
+    "generator": "llm",
+    "live_calls": 1931,
+    "n_for_review": 1388,
+    "n_generated": 3000,
+    "n_jobs": 3000,
+    "n_kept": 2870,
+    "n_rejected": 130,
+    "rejected_by_reason": {
+      "near_duplicate": 6,
+      "omitted_field_present": 52,
+      "refusal_cue_missing": 42,
+      "unexpected_transit_mention": 5,
+      "unfilled_placeholder": 27
+    },
+    "relabel_disagreement_rate": 0.484
+  },
+  "generator_models": [
+    "openai/gpt-4o-mini",
+    "google/gemini-2.5-flash-lite",
+    "meta-llama/llama-3.3-70b-instruct"
+  ],
+  "prompt_version": "gen_v3",
+  "relabel_models": [
+    "deepseek/deepseek-chat",
+    "mistralai/mistral-small-3.2-24b-instruct",
+    "qwen/qwen-2.5-72b-instruct"
+  ],
+  "relabel_prompt_version": "relabel_v3",
+  "seed": 42,
+  "split": {
+    "handwritten_in_test": 150,
+    "max_flags_for_train_val": 1,
+    "n_leakage_dropped": 2,
+    "n_unused": 992,
+    "overlap": {
+      "cosine_threshold": 0.85,
+      "cross_split_overlap_is_zero": true,
+      "exact_text_overlap": {
+        "train-test": 0,
+        "train-val": 0,
+        "val-test": 0
+      },
+      "group_overlap": {
+        "train-test": 0,
+        "train-val": 0,
+        "val-test": 0
+      },
+      "max_cosine": {
+        "train-test": 0.844,
+        "train-val": 0.7945,
+        "val-test": 0.7788
+      }
+    },
+    "per_action": {
+      "test": {
+        "clarify": 60,
+        "compare_modes": 60,
+        "escalate": 60,
+        "lookup_only": 60,
+        "plan": 60,
+        "refuse": 60,
+        "replan": 60
+      },
+      "train": {
+        "clarify": 77,
+        "compare_modes": 160,
+        "escalate": 142,
+        "lookup_only": 160,
+        "plan": 480,
+        "refuse": 228,
+        "replan": 160
+      },
+      "val": {
+        "clarify": 30,
+        "compare_modes": 19,
+        "escalate": 20,
+        "lookup_only": 20,
+        "plan": 60,
+        "refuse": 30,
+        "replan": 20
+      }
+    },
+    "shortfall_test": {},
+    "sizes": {
+      "test": 420,
+      "train": 1407,
+      "val": 199
+    },
+    "train_val_shortfall": {
+      "clarify": {
+        "train": 163,
+        "val": 0
+      },
+      "escalate": {
+        "train": 18,
+        "val": 0
+      },
+      "refuse": {
+        "train": 11,
+        "val": 0
+      }
+    }
+  },
+  "temperatures": [
+    0.7,
+    1.0,
+    1.2
+  ],
+  "test_frozen": true,
+  "test_n": 420,
+  "test_sha256": "68379f9c7dc8183567db18b868cf5a1f7bf07a1b3e7a72a06944c06c49e8202c"
+}
