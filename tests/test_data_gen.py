@@ -429,3 +429,23 @@ def test_T_8_36_compare_rule():
     assert not P.compare_rule_applies(rec("is it faster to drive or walk to Casa Loma?"))
     assert not P.compare_rule_applies(rec("compare bike routes to the market"))
     assert not P.compare_rule_applies(rec("walk if under 25 minutes otherwise take the bus"))
+
+
+def test_t_8_37_apply_d3_review(tmp_path):
+    """keep/fix/reject by id; fix keeps turn count; reject goes to d3_rejected; rerun is idempotent."""
+    import csv, json, shutil
+    from data_gen import datasets as D
+    shutil.copy(Path(D.DATASETS_DIR) / "d3_adversarial.jsonl", tmp_path / "d3_adversarial.jsonl")
+    recs = D.read_jsonl(str(tmp_path / "d3_adversarial.jsonl"))
+    with open(tmp_path / "r.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "family", "tactic", "turns", "decision", "edited_turns", "reviewer", "notes"])
+        for i, r in enumerate(recs):
+            dec = "reject" if i == 0 else "fix" if i == 1 else "keep"
+            w.writerow([r["id"], "", "", "", dec, " ||| ".join(t + " X" for t in r["turns"]) if i == 1 else "", "", ""])
+    out = D.apply_d3_review(str(tmp_path / "r.csv"), str(tmp_path))
+    assert out["rejected"] == [recs[0]["id"]] and out["fixed"] == [recs[1]["id"]] and out["kept"] == len(recs) - 1
+    again = D.apply_d3_review(str(tmp_path / "r.csv"), str(tmp_path))
+    assert again["kept"] == out["kept"]
+    fixed = [r for r in D.read_jsonl(str(tmp_path / "d3_adversarial.jsonl")) if r["id"] == recs[1]["id"]][0]
+    assert fixed["turns"][-1].endswith(" X") and fixed["utterance"] == fixed["turns"][-1]

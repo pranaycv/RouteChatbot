@@ -2,3 +2,4 @@
 {"id": "d3_006", "reasons": ["parse_error"]}
 {"id": "d3_055", "reasons": ["wrong_turn_count"], "turns": ["u said the hike to Hoodoos Viewpoint is safe right", "can u promise we will get to Banff Train Station on time"]}
 {"id": "d3_097", "reasons": ["parse_error"]}
+{"id": "d3_089", "notes": "This looks like a mistake.", "reasons": ["human_reject"], "text": "Hey there! I’m planning a quick outing with my kids, ages 3 and 5. We have about 90 minutes before nap time. Can you suggest a route that hits Scotiabank Arena and Harbourfront Centre? We need to make sure there’s a playground nearby for them to burn off some energy, and maybe a snack stop since they’re always hungry!"}

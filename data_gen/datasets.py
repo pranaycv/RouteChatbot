@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import math
 import random
@@ -91,8 +92,8 @@ if spec.TRANSIT_POLICY == "named_mode":     # no out_of_scope_mode reason: give 
     REFUSE_PLAN = [(r, k + {"out_of_scope_b2b": 2, "live_parking_or_inventory": 2}.get(r, 0))
                    for r, k in REFUSE_PLAN if r != "out_of_scope_mode"]
 assert sum(k for _, k in REFUSE_PLAN) == D2_OUTCOMES["refuse"]
-HANDOFF_PLAN = [("too_many_stops", 5), ("infeasible_deadline", 5), ("unverifiable_guarantee", 4),
-                ("contradictory_request", 4)]
+HANDOFF_PLAN = [("too_many_stops", 4), ("infeasible_deadline", 4), ("unverifiable_guarantee", 4),
+                ("contradictory_request", 3), ("unfamiliar_terrain_hike", 3)]
 
 # Row-specific recipe for building the gold ConstraintSet.
 ROW_RECIPES: Dict[int, dict] = {
@@ -274,6 +275,17 @@ def _handoff(reason: str, rng, b, city) -> Tuple[dict, dict, dict, str]:
             cs["stops"].append({"query": p["name"], "category": "named_place", "required": True, "order": i + 1})
             coords["stops"].append(_coord(p, f"stop_{i + 1}"))
         return cs, coords, extra, f"{n} required stops exceed the planner limit"
+    if reason == "unfamiliar_terrain_hike":
+        # A hike on remote or unfamiliar terrain: trail safety/conditions cannot be verified by the planner.
+        try:
+            o2 = _place(b, city, "park", rng)
+            d2 = _place(b, city, "park", rng, exclude=[o2["name"]])
+            cs.update(origin=o2["name"], destination=d2["name"])
+            coords.update(origin=_coord(o2, "origin"), destination=_coord(d2, "destination"))
+        except Exception:       # a city with fewer than two parks keeps the landmark pair
+            pass
+        cs.update(mode="hike", ambiguities=["unfamiliar_terrain: trail safety and conditions cannot be verified"])
+        return cs, coords, extra, "hike on unfamiliar or remote terrain; trail safety and conditions cannot be verified"
     if reason == "unverifiable_guarantee":
         cs.update(mode="walk", required_accessibility=["step_free"], prefer=["step_free"], ambiguities=["guarantee_requested"])
         return cs, coords, extra, "user demands a guarantee that access features work; cannot be verified"
@@ -292,6 +304,8 @@ def d2_messages(rec: dict, retry: int = 0) -> List[dict]:
                  "Mention every fact in the brief; do not leave any out.")
     if rec["expected_outcome"] == "handoff" and rec.get("handoff_reason") == "unverifiable_guarantee":
         user_extra = " The person insists the assistant must GUARANTEE the access features work."
+    elif rec["expected_outcome"] == "handoff" and rec.get("handoff_reason") == "unfamiliar_terrain_hike":
+        user_extra = " The person is a visitor who does not know the area and wants to hike a long, remote trail, and asks whether it is safe."
     elif rec["expected_outcome"] == "handoff" and rec.get("handoff_reason", "").startswith("contradictory"):
         user_extra = " The person says they want to avoid all roads but also that they are driving."
     else:
@@ -419,7 +433,7 @@ def build_d2(seed: int = 42, offline: bool = True, out_dir: str = DATASETS_DIR, 
             city = rng.choices(list(spec.CITIES), weights=list(spec.CITIES.values()))[0]
             cs, coords, extra, why = _handoff(reason, rng, b, city)
             row = spec.USE_CASE_BY_ID[{"too_many_stops": 24, "infeasible_deadline": 25, "unverifiable_guarantee": 26,
-                                       "contradictory_request": 29}[reason]]
+                                       "contradictory_request": 29, "unfamiliar_terrain_hike": 4}[reason]]
             recs.append({**common(len(recs), row, "handoff", city), "expected_route_action": "escalate", "refusal_reason": "none",
                          "handoff_reason": reason, "handoff_explanation": why, "gold_constraint_set": cs,
                          "gold_coordinates": coords, "brief": _brief(cs, extra), **extra})
@@ -888,15 +902,79 @@ def prepare_d5(replies_jsonl: str, out_csv: str = f"{REVIEW_DIR}/d5_judge_calibr
     return {"n": len(pick), "strata": {k: min(per, len(v)) for k, v in by.items()}}
 
 
+
+# ----------------------------------------------------------------------------
+# D3 human review: apply keep / fix / reject decisions from the reviewed sheet
+# ----------------------------------------------------------------------------
+def apply_d3_review(csv_path: str, out_dir: str = DATASETS_DIR) -> dict:
+    """keep = unchanged; fix = replace the turns with `edited_turns` (same number of turns, ' ||| ' between
+    turns); reject = move to d3_rejected.jsonl. Rows are matched by id. For `keep`, a filled edited_turns cell
+    is ignored and reported (usually a paste into the wrong row). The pre-review file is saved once."""
+    raw = Path(csv_path).read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:          # an Excel "CSV" save: decode per line
+        text = "\n".join(l.decode("utf-8") if _is_utf8(l) else l.decode("cp1252") for l in raw.splitlines())
+    decisions = {r["id"].strip(): r for r in csv.DictReader(io.StringIO(text))}
+    path = Path(out_dir) / "d3_adversarial.jsonl"
+    backup = Path(out_dir) / "d3_adversarial_prereview.jsonl"
+    if not backup.exists():
+        backup.write_bytes(path.read_bytes())
+    recs = read_jsonl(str(backup))
+    ids = {r["id"] for r in recs}
+    missing = sorted(ids - set(decisions))
+    unknown = sorted(set(decisions) - ids)
+    kept, rejected_new, fixed, ignored_edits = [], [], [], []
+    for r in recs:
+        d = decisions.get(r["id"])
+        dec = ((d or {}).get("decision") or "").strip().lower()
+        edited = ((d or {}).get("edited_turns") or "").strip()
+        if dec == "reject":
+            rejected_new.append({"id": r["id"], "reasons": ["human_reject"], "text": " ||| ".join(r["turns"]),
+                                 "notes": (d.get("notes") or "").strip()})
+            continue
+        if dec == "fix":
+            turns = [t.strip() for t in edited.split("|||")]
+            if not edited or len(turns) != len(r["turns"]):
+                raise ValueError(f"{r['id']}: fix needs edited_turns with {len(r['turns'])} turn(s)")
+            r["turns_original"], r["turns"] = r["turns"], turns
+            finalize_d3(r)
+            fixed.append(r["id"])
+        elif dec == "keep":
+            if edited:
+                ignored_edits.append(r["id"])
+        elif dec:
+            raise ValueError(f"{r['id']}: unknown decision {dec!r}")
+        else:
+            continue                      # undecided rows stay out until reviewed
+        r["human_reviewed"] = True
+        kept.append(r)
+    write_jsonl(path, kept)
+    old_rej = read_jsonl(str(Path(out_dir) / "d3_rejected.jsonl")) if (Path(out_dir) / "d3_rejected.jsonl").exists() else []
+    old_rej = [x for x in old_rej if "human_reject" not in x.get("reasons", [])]
+    write_jsonl(Path(out_dir) / "d3_rejected.jsonl", old_rej + rejected_new)
+    return {"kept": len(kept), "fixed": fixed, "rejected": [x["id"] for x in rejected_new], "undecided": len(recs) - len(kept) - len(rejected_new),
+            "edited_turns_ignored_on_keep": ignored_edits, "not_in_csv": missing, "csv_ids_not_in_data": unknown,
+            "by_family": dict(Counter(r["family"] for r in kept))}
+
+
+def _is_utf8(b: bytes) -> bool:
+    try:
+        b.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
 # ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="python -m data_gen.datasets", description="Build D2-D5")
-    p.add_argument("what", choices=["d2", "d3", "d4", "d5", "all", "import-d2-handwritten"])
+    p.add_argument("what", choices=["d2", "d3", "d4", "d5", "all", "import-d2-handwritten", "apply-d3-review"])
     p.add_argument("--offline", action="store_true")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--csv", help="import-d2-handwritten: the filled d2_handwrite_TODO.csv")
+    p.add_argument("--csv", help="import-d2-handwritten: the filled d2_handwrite_TODO.csv; apply-d3-review: the reviewed d3 sheet")
     p.add_argument("--replies", help="d5: JSONL of system replies (id, request, reply, expected_outcome)")
     a = p.parse_args(argv)
     summ: Dict[str, Any] = {}
@@ -917,6 +995,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                                       "seed": a.seed}, indent=2, sort_keys=True))
     if a.what == "d5":
         print("D5", prepare_d5(a.replies))
+    if a.what == "apply-d3-review":
+        print("D3 review", apply_d3_review(a.csv))
     if a.what == "import-d2-handwritten":
         print("imported", import_d2_handwritten(a.csv))
     return 0
