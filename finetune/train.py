@@ -79,7 +79,18 @@ def train(args: argparse.Namespace) -> dict:
 
     # One GPU per process. Kaggle sometimes attaches two T4s, and SFTTrainer refuses nn.DataParallel.
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+    # Sequence lengths vary from record to record, so the caching allocator fragments and its reserved
+    # pool creeps up to the whole card even though one forward/backward peaks at ~6.5 GB (measured,
+    # bf16, 1,700 tokens, batch 1). Expandable segments stop the creep.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     import torch
+
+    # On Windows the driver does not fail an over-full card; it spills into system memory and each
+    # step gets 10 to 50 times slower. Capping the allocator makes PyTorch free its cache (or fail
+    # fast) instead. GPU_MEMORY_FRACTION overrides; empty disables.
+    fraction = os.environ.get("GPU_MEMORY_FRACTION", "0.9" if sys.platform == "win32" else "")
+    if fraction and torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(float(fraction))
     from datasets import load_dataset
     from peft import LoraConfig
     from transformers import AutoModelForCausalLM, AutoTokenizer

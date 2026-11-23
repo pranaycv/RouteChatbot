@@ -66,7 +66,7 @@ def test_handbook_settings_are_in_config():
     cfg = load_ft_config()
     assert cfg["lora"] == {"r": 16, "lora_alpha": 32, "lora_dropout": 0.05, "target_modules": "all-linear", "task_type": "CAUSAL_LM"}
     sft = cfg["sft"]
-    # Effective batch 8 as the handbook (4 x 2), split 2 x 4 for ~1,500-token records; max_length 2048
+    # Effective batch 8 as the handbook (4 x 2), split 1 x 8 for ~1,500-token records; max_length 2048
     # because the label guide alone is 1,430 tokens and the handbook's 512 would drop every completion.
     assert sft["num_train_epochs"] == 3
     assert sft["per_device_train_batch_size"] * sft["gradient_accumulation_steps"] == 8
