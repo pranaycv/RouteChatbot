@@ -63,7 +63,7 @@ def seed_synthetic() -> int:
 
 
 def record_live() -> int:
-    os.environ["FIXTURES"] = "record"
+    os.environ["FIXTURES"] = "refresh"  # always call the model and overwrite, so --record really re-records
     n = 0
     for case in extractor_cases():
         extractor.extract(case["clean_text"], case["classification"], case["known"], request_id=case["id"])

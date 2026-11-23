@@ -5,9 +5,11 @@ What it does
   names from config.yaml. Otherwise, with OPENROUTER_API_KEY set, it calls OpenRouter and adds
   the "openai/" prefix OpenRouter expects.
 - Record and replay. FIXTURES=record saves every response as
-  routechat/fixtures/llm/<sha256 of model, temperature, messages, schema>.json. FIXTURES=replay
-  reads them back and never touches the network, so tests and evaluation run offline and free.
-  A missing fixture in replay raises LLMFixtureMissing with the key, so the fix is one record run.
+  routechat/fixtures/llm/<sha256 of model, temperature, messages, schema>.json and reuses a saved
+  one when it exists, so an interrupted evaluation run resumes without paying for the same call
+  twice. FIXTURES=replay reads them back and never touches the network, so tests and evaluation
+  run offline and free; a missing fixture raises LLMFixtureMissing with the key. FIXTURES=refresh
+  forces a live call and overwrites the saved response.
 - Prices from config.yaml give cost_usd per call.
 - log_stage writes one JSON line per stage call in the WP10 stage-line format (eval/log_schema.py).
 
@@ -154,12 +156,14 @@ def complete(
     key = fixture_key(model, temperature, messages, schema_name)
     path = fixture_path(key)
 
-    if mode == "replay":
-        if not path.exists():
-            raise LLMFixtureMissing(
-                f"no fixture {key} for model={model} schema={schema_name}; "
-                "run the same call once with FIXTURES=record, or scripts/llm_fixtures.py"
-            )
+    # replay: recorded only.  record: recorded if present, else live and saved (a rerun never pays twice).
+    # refresh: always live and saved.  unset: live, nothing saved.
+    if mode == "replay" and not path.exists():
+        raise LLMFixtureMissing(
+            f"no fixture {key} for model={model} schema={schema_name}; "
+            "run the same call once with FIXTURES=record, or scripts/llm_fixtures.py"
+        )
+    if mode in ("replay", "record") and path.exists():
         rec = json.loads(path.read_text(encoding="utf-8"))
         tokens_in, tokens_out = int(rec.get("tokens_in", 0)), int(rec.get("tokens_out", 0))
         # The latency recorded at call time is returned, so a replayed run reports real model latency.
@@ -168,7 +172,7 @@ def complete(
     started = time.perf_counter()
     text, tokens_in, tokens_out, provider = _live_call(messages, model, temperature, max_tokens, schema)
     latency_ms = round((time.perf_counter() - started) * 1000, 3)
-    if mode == "record":
+    if mode in ("record", "refresh"):
         write_fixture(messages, model, temperature, schema_name, text, tokens_in, tokens_out, source="live", provider=provider, latency_ms=latency_ms)
     return LLMResult(text, tokens_in, tokens_out, model, provider, latency_ms, cost_usd(model, tokens_in, tokens_out))
 
