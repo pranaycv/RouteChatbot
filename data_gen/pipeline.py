@@ -928,7 +928,12 @@ def stage_generate(cfg: Cfg, client: LLMClient, verbose: bool = True) -> dict:
             print(f"  generated {i}/{len(jobs)} (${client.budget.cost_spent:.3f})")
     kept, rejected = run_qc(raw)
     for i, r in enumerate(kept):
-        r["relabel"] = relabel(r, i, client)
+        try:
+            r["relabel"] = relabel(r, i, client)
+        except BudgetExceeded as e:               # keep everything done so far; rerun resumes from the cache
+            print(f"! budget stop during relabel at record {i}: {e}")
+            stopped = True
+            r["relabel"] = {"labels": None, "model": None, "error": "budget"}
         apply_live_rule(r)
     cand = [r for r in kept]
     flagged = [r for r in cand if r["disagree"]]

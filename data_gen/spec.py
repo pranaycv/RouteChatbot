@@ -437,4 +437,4 @@ RELABEL_MODELS = ["deepseek/deepseek-chat", "mistralai/mistral-small-3.2-24b-ins
 TEMPERATURES = [0.7, 1.0, 1.2]
 TOP_P = 0.95
 MAX_COST_USD = 5.00                                     # hard budget cap (handbook)
-MAX_CALLS = 8000
+MAX_CALLS = 25000                                      # safety net only; the $ cap is the real limit (3 000 jobs + 2-of-3 relabel is ~11 000 calls)
