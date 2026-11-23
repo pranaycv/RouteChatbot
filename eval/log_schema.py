@@ -38,7 +38,8 @@ STAGE_OPTIONAL = {
     "prompt_version": str, # e.g. extractor_v1
     "error_type": str,     # exception type only, as graph._log_failure already writes it; never raw text
 }
-API_NAMES = ("geocoding", "searchbox", "searchbox_category", "graphhopper", "directions", "openai", "openrouter")
+# "geocode" is the name WP4's map client logs for Mapbox geocoding; "geocoding" is kept for older lines.
+API_NAMES = ("geocode", "geocoding", "searchbox", "searchbox_category", "graphhopper", "directions", "openai", "openrouter")
 
 # 2. Request line (stage == "request"), one per request.
 OUTCOMES = ("accept", "clarify", "refuse", "handoff", "fixed_reply")

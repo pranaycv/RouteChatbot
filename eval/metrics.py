@@ -32,22 +32,40 @@ def trip_success(logs: pd.DataFrame, gold: pd.DataFrame, judge: pd.DataFrame | N
     the team's manual route inspections. If truth is missing we fall back to the verifier's own
     statuses and mark the row, because that version can only overstate success.
     """
-    df = gold[["item_id", "expected_outcome"]].merge(
-        logs[["item_id", "outcome", "checks"]], on="item_id", how="left")
+    log_cols = [c for c in ("item_id", "outcome", "checks", "handoff_reason") if c in logs]
+    df = gold[["item_id", "expected_outcome"]].merge(logs[log_cols], on="item_id", how="left")
     df["outcome_ok"] = df["outcome"] == df["expected_outcome"]
 
-    if truth is not None:
-        df = df.merge(truth[["item_id", "hard_truly_met"]], on="item_id", how="left")
-        df["truth_source"] = "gold"
+    # P-09: hiking and transit are not in the pilot. When the gold mode is one of them and the system
+    # stops with "not covered yet", that is the behaviour the policy asks for, so it counts as the
+    # right outcome. The column keeps these visible so they can be reported on their own.
+    if "gold_constraints" in gold and "handoff_reason" in df:
+        mode = gold.set_index("item_id")["gold_constraints"].apply(lambda c: c.get("mode") if isinstance(c, dict) else None)
+        df["not_covered_p09"] = (df["item_id"].map(mode).isin(NOT_COVERED_MODES) & (df["outcome"] == "handoff")
+                                 & df["handoff_reason"].isin(NOT_COVERED_REASONS))
     else:
-        df["hard_truly_met"] = df["checks"].apply(
-            lambda cs: all(c.get("status") == "met" for c in (cs or []) if c.get("hard")))
+        df["not_covered_p09"] = False
+    df["outcome_ok"] = df["outcome_ok"] | df["not_covered_p09"]
+
+    by_verifier = df["checks"].apply(
+        lambda cs: all(c.get("status") == "met" for c in (cs if isinstance(cs, list) else []) if c.get("hard")))
+    if truth is not None:
+        # Only some routes are inspected by hand (50 in the plan). An inspected route uses the person's
+        # answer; any other route falls back to the verifier's statuses and is marked, never failed.
+        human = truth.drop_duplicates("item_id").set_index("item_id")["hard_truly_met"]
+        checked = df["item_id"].isin(human.index)
+        df["hard_truly_met"] = np.where(checked, df["item_id"].map(human).fillna(False).astype(bool), by_verifier)
+        df["truth_source"] = np.where(checked, "human", "verifier_only")
+    else:
+        df["hard_truly_met"] = by_verifier
         df["truth_source"] = "verifier_only"
-    df["hard_ok"] = np.where(df["outcome"] == "accept", df["hard_truly_met"].fillna(False), True)
+    df["hard_ok"] = np.where(df["outcome"] == "accept", df["hard_truly_met"], True)
 
     if judge is not None and len(judge):
         unsup = judge[judge["question"] == "unsupported_claim"].set_index("item_id")["answer"]
-        df["judge_ok"] = ~df["item_id"].map(unsup).fillna(False).astype(bool)
+        # Clean only when the judge explicitly said "no unsupported claim". A reply the judge could
+        # not grade, or skipped, does not count as clean, so a judge failure can't inflate success.
+        df["judge_ok"] = df["item_id"].map(unsup).eq(False)
     else:
         df["judge_ok"] = True
     df["success"] = df["outcome_ok"] & df["hard_ok"].astype(bool) & df["judge_ok"]
@@ -90,10 +108,11 @@ def extraction_field_accuracy(pred: pd.DataFrame, gold: pd.DataFrame, fields: li
     rows = []
     for f in fields:
         def same(a, b):
+            none = lambda x: x is None or (isinstance(x, float) and np.isnan(x))   # pandas turns a missing value into NaN
             if isinstance(a, (list, tuple, set)) or isinstance(b, (list, tuple, set)):
-                return set(map(str, a or [])) == set(map(str, b or []))
-            if a is None or (isinstance(a, float) and np.isnan(a)):
-                return b is None or (isinstance(b, float) and np.isnan(b))
+                return set(map(str, [] if none(a) else a)) == set(map(str, [] if none(b) else b))
+            if none(a):
+                return none(b)
             return a == b
         ok = [same(a, b) for a, b in zip(df[f + "_gold"], df[f + "_pred"])]
         rows.append({"field": f, "accuracy": float(np.mean(ok)) if ok else float("nan"), "n": len(ok)})
@@ -124,7 +143,7 @@ def handoff_precision_recall(logs: pd.DataFrame, gold: pd.DataFrame) -> dict:
 def latency_table(stage_logs: pd.DataFrame, request_logs: pd.DataFrame) -> pd.DataFrame:
     """p50 and p95 latency per stage (from stage lines) and end to end (from request lines)."""
     rows = []
-    for stage, g in stage_logs.groupby("stage"):
+    for stage, g in (stage_logs.groupby("stage") if "stage" in stage_logs else []):  # stubs log no stage lines
         rows.append({"stage": stage, "p50_ms": g["latency_ms"].quantile(.5), "p95_ms": g["latency_ms"].quantile(.95), "n": len(g)})
     rows.append({"stage": "end_to_end", "p50_ms": request_logs["latency_ms_total"].quantile(.5),
                  "p95_ms": request_logs["latency_ms_total"].quantile(.95), "n": len(request_logs)})
@@ -142,19 +161,27 @@ def cost_per_success(request_logs: pd.DataFrame, success: pd.Series) -> dict:
 
 # ---------------- LLM judge agreement (D5, 50 replies) ----------------
 JUDGE_QUESTIONS = ("all_warnings_present", "unsupported_claim", "makes_promise", "user_knows_next_step")
+NOT_COVERED_MODES = ("hike", "transit")                                   # P-09
+NOT_COVERED_REASONS = ("mode_not_supported", "transit_not_supported")     # codes the map tools put on the handoff
 
 
-def judge_agreement(judge: pd.DataFrame, human_a: pd.DataFrame, human_b: pd.DataFrame) -> pd.DataFrame:
-    """Each frame: item_id, question, answer (bool). Cohen's kappa per question; target 0.6 or more."""
+def judge_agreement(judge: pd.DataFrame, human_a: pd.DataFrame, human_b: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Each frame: item_id, question, answer (bool). Cohen's kappa per question; target 0.6 or more.
+    human_b is optional: with one grader we report judge vs that person only, and the memo says so."""
     rows = []
     for q in JUDGE_QUESTIONS:
         a = human_a[human_a.question == q].set_index("item_id")["answer"]
-        b = human_b[human_b.question == q].set_index("item_id")["answer"]
         j = judge[judge.question == q].set_index("item_id")["answer"]
-        ids = a.index.intersection(b.index).intersection(j.index)
+        ids = a.index.intersection(j.index)
+        b = None
+        if human_b is not None:
+            b = human_b[human_b.question == q].set_index("item_id")["answer"]
+            ids = ids.intersection(b.index)
         def k(x, y):
             x, y = x.loc[ids].astype(int), y.loc[ids].astype(int)
             return float(cohen_kappa_score(x, y)) if len(ids) and (x.nunique() > 1 or y.nunique() > 1) else float("nan")
-        rows.append({"question": q, "n": len(ids), "kappa_human_human": k(a, b),
-                     "kappa_judge_human_a": k(j, a), "kappa_judge_human_b": k(j, b)})
+        rows.append({"question": q, "n": len(ids),
+                     "kappa_human_human": k(a, b) if b is not None else float("nan"),
+                     "kappa_judge_human_a": k(j, a),
+                     "kappa_judge_human_b": k(j, b) if b is not None else float("nan")})
     return pd.DataFrame(rows)

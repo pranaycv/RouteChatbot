@@ -34,13 +34,15 @@ PrimaryMode = Literal[
     "unspecified",
 ]
 ClarifyField = Literal["none", "origin", "destination", "stops"]
-# Precedence when several could apply: left to right.
+# Precedence when several could apply: left to right. out_of_scope_mode is a
+# request for transit, which the pilot does not plan; hike stays a named mode.
 RefusalReason = Literal[
     "none",
     "prompt_injection",
     "data_request",
     "unsafe_or_illegal",
     "out_of_scope_b2b",
+    "out_of_scope_mode",
     "booking_or_payment",
     "live_parking_or_inventory",
 ]

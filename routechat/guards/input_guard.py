@@ -19,6 +19,7 @@ WP7 masks them in logs. Thresholds come from config.yaml via get_settings().
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from functools import lru_cache
 from pathlib import Path
@@ -228,7 +229,17 @@ def guard_text(utterance: str) -> GuardResult:
 
 def input_guard(state: dict[str, Any]) -> dict[str, GuardResult]:
     """LangGraph node: read utterance, write only the `guard` field."""
+    from routechat.logging import stage_line  # routechat.logging imports this module
+
     utterance = state.get("utterance") or ""
     if not isinstance(utterance, str):
         utterance = str(utterance)
-    return {"guard": guard_text(utterance)}
+    started = time.perf_counter()
+    result = guard_text(utterance)
+    stage_line(
+        "guard_in",
+        str(state.get("request_id", "")),
+        result.decision,
+        (time.perf_counter() - started) * 1000,
+    )
+    return {"guard": result}
