@@ -2,7 +2,6 @@
 
 from math import asin, cos, isfinite, radians, sin, sqrt
 
-from routechat.config import get_settings
 from routechat.schemas import ConstraintSet, LineString, ResolvedPlace, RouteCandidate
 
 PROFILES = {"walk": "foot", "run": "foot", "bike": "bike", "car": "car"}
@@ -18,36 +17,9 @@ def distance_m(first, second):
 
 
 def build_request(
-    constraints: ConstraintSet, places: list[ResolvedPlace], mode: str, *, revise: bool,
+    constraints: ConstraintSet, places: list[ResolvedPlace], mode: str,
 ) -> dict:
-    weights = get_settings().maps.custom_model
-    priority = []
-
-    def add(condition, weight):
-        priority.append({"if": condition, "multiply_by": str(weight)})
-
-    if "highways" in constraints.avoid:
-        add("road_class == MOTORWAY", weights.avoid_highways.motorway)
-        highway = weights.avoid_highways
-        add("road_class == TRUNK", highway.trunk_on_revise if revise else highway.trunk)
-    if "tolls" in constraints.avoid:
-        add("toll != NO", weights.avoid_tolls)
-    if "ferries" in constraints.avoid:
-        add("road_environment == FERRY", weights.avoid_ferries)
-    if "bike_lanes" in constraints.prefer and mode == "bike":
-        bike = weights.prefer_bike_lanes
-        add("bike_network == MISSING", bike.missing_on_revise if revise else bike.missing)
-    if constraints.minimize_elevation:
-        slope = weights.minimize_elevation
-        condition = "average_slope > 4" if revise else "average_slope > 6"
-        add(condition, slope.slope_above_4_on_revise if revise else slope.slope_above_6)
-    if {"quiet_roads", "scenic"}.intersection(constraints.prefer):
-        quiet = weights.prefer_quiet_or_scenic
-        add(
-            "road_class == PRIMARY || road_class == SECONDARY",
-            quiet.primary_or_secondary_on_revise if revise else quiet.primary_or_secondary,
-        )
-
+    """Build a Standard-mode request. WP5 checks preferences on the resulting route."""
     points = [[place.lon, place.lat] for place in places]
     request = {
         "profile": PROFILES[mode], "points": points, "points_encoded": False,
@@ -57,8 +29,6 @@ def build_request(
         request.update(algorithm="round_trip", points=points[:1])
         if constraints.target_distance_km is not None:
             request["round_trip.distance"] = constraints.target_distance_km * 1000
-    if priority:
-        request.update({"custom_model": {"priority": priority}, "ch.disable": True})
     return request
 
 

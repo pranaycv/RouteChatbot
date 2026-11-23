@@ -78,12 +78,16 @@ def test_t_4_01_running_example_and_revision(monkeypatch):
     assert candidate.duration_s == 720
     assert candidate.stops_in_order == ["King Station", "On-route store", "U of T"]
 
+    standard_request = next(call[-1] for call in fixtures.calls if call[0] == "graphhopper")
+    assert "custom_model" not in standard_request
+    assert "ch.disable" not in standard_request
+
     fixtures.calls.clear()
     revised = maps.maps_node(state | result | {"revision_count": 1})
     assert revised["candidates"][0].error is None
     assert [call[0] for call in fixtures.calls] == ["graphhopper", "directions"]
-    rules = fixtures.calls[0][-1]["custom_model"]["priority"]
-    assert {"if": "average_slope > 4", "multiply_by": "0.2"} in rules
+    assert "custom_model" not in fixtures.calls[0][-1]
+    assert "ch.disable" not in fixtures.calls[0][-1]
 
 
 def test_t_4_02_picks_smallest_detour():
@@ -142,7 +146,7 @@ def test_round_trip_distance_uses_metres():
         "destination": None, "loop": True, "target_distance_km": 5, "stops": [],
     })
     places = maps._resolve(FixtureMaps(), constraints)
-    payload = build_request(constraints, places, "bike", revise=False)
+    payload = build_request(constraints, places, "bike")
     assert payload["algorithm"] == "round_trip"
     assert payload["round_trip.distance"] == 5000
     assert len(payload["points"]) == 1

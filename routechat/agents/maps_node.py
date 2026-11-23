@@ -174,11 +174,11 @@ def _directions(client, candidate, places):
         ]
 
 
-def _candidate(client, constraints, places, mode, revise, needs_live_data):
+def _candidate(client, constraints, places, mode, needs_live_data):
     try:
         payload = client.request(
             "graphhopper", "POST", _ROUTE, {},
-            build_request(constraints, places, mode, revise=revise),
+            build_request(constraints, places, mode),
         )
         route = candidate_from_path(payload["paths"][0], places, mode, f"gh_{mode}_1")
     except (MapError, KeyError, IndexError, TypeError, ValueError) as error:
@@ -220,7 +220,7 @@ def maps_node(state):
                 if revise and state.get("places") else _resolve(client, constraints)
             )
             candidates = [
-                _candidate(client, constraints, places, mode, revise, classification.needs_live_data)
+                _candidate(client, constraints, places, mode, classification.needs_live_data)
                 for mode in modes
             ]
         except MapError as error:
