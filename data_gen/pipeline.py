@@ -89,7 +89,7 @@ def parse_labels(s: str, base: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     for part in filter(None, (p.strip() for p in s.split(";"))):
         k, v = part.split("=", 1)
         k, v = k.strip(), v.strip()
-        out[k] = (v.lower() == "true") if k == "needs_live_data" else v
+        out[k] = (v.lower() in ("true", "tru", "yes", "1")) if k == "needs_live_data" else v
     return out
 
 
@@ -789,7 +789,7 @@ REVIEW_COLS = ["id", "utterance", "known", "target_labels", "relabel", "disagree
                "corrected_labels", "edited_utterance", "reviewer", "notes"]
 
 
-def export_review_csv(records: List[dict], path) -> str:
+def export_review_csv(records: List[dict], path, prefill_agreed: bool = False) -> str:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=REVIEW_COLS)
@@ -798,9 +798,26 @@ def export_review_csv(records: List[dict], path) -> str:
             rl = (r.get("relabel") or {}).get("labels")
             w.writerow({"id": r["id"], "utterance": r["utterance"], "known": json.dumps(r.get("known")) if r.get("known") else "",
                         "target_labels": fmt_labels(r["labels"]), "relabel": fmt_labels(rl) if rl else "",
-                        "disagreeing_fields": ",".join(r.get("disagree", [])), "decision": "", "corrected_labels": "",
-                        "edited_utterance": "", "reviewer": "", "notes": ""})
+                        "disagreeing_fields": ",".join(r.get("disagree", [])),
+                        "decision": "keep" if (prefill_agreed and r.get("source") != "human" and not r.get("disagree")) else "",
+                        "corrected_labels": "", "edited_utterance": "", "reviewer": "",
+                        "notes": "pre-filled: generator and relabel vote agree; skim and change if wrong"
+                        if (prefill_agreed and r.get("source") != "human" and not r.get("disagree")) else ""})
     return str(path)
+
+
+LABEL_ALIASES = {"compare": "compare_modes", "compare_mode": "compare_modes", "lookup": "lookup_only",
+                 "tru": "true", "fals": "false"}
+
+
+def clean_corrected(lab: Dict[str, Any]) -> Dict[str, Any]:
+    """Forgive typing slips in hand-corrected labels: short names, and a stale clarify_field."""
+    lab = {k: LABEL_ALIASES.get(v, v) if isinstance(v, str) else v for k, v in lab.items()}
+    if lab.get("route_action") != "clarify":
+        lab["clarify_field"] = "none"
+    if isinstance(lab.get("needs_live_data"), str):
+        lab["needs_live_data"] = lab["needs_live_data"].strip().lower() == "true"
+    return lab
 
 
 def apply_review(records: List[dict], csv_path, require_all: bool = False) -> Tuple[List[dict], dict]:
@@ -824,13 +841,16 @@ def apply_review(records: List[dict], csv_path, require_all: bool = False) -> Tu
         r = dict(r)
         if d == "fix":
             if row["corrected_labels"].strip():
-                r["labels"] = parse_labels(row["corrected_labels"], r["labels"])
+                r["labels"] = clean_corrected(parse_labels(row["corrected_labels"], r["labels"]))
                 problems = spec.validate_labels(r["labels"])
                 if problems:
                     raise ValueError(f"review row {r['id']}: corrected_labels invalid ({'; '.join(problems)})")
                 r["label_source"] = "human_fixed"
             if row["edited_utterance"].strip():
                 r["utterance"] = row["edited_utterance"].strip()
+            for f in spec.LABEL_FIELDS:               # keep flat columns (test.jsonl) in step with labels
+                if f in r:
+                    r[f] = r["labels"][f]
             stats["fixed"] += 1
         else:
             stats["kept"] += 1
@@ -1046,8 +1066,14 @@ def _max_sim_to(texts_a: List[str], texts_b: List[str], vec=None) -> np.ndarray:
     return cosine_similarity(vec.transform(texts_a), vec.transform(texts_b)).max(axis=1)
 
 
-def make_splits(pool: List[dict], handwritten: List[dict], seed: int = 42, vec=None) -> Tuple[dict, dict]:
-    """Class-balanced test (60/action, hand-written counted first), val by quota, rest train.
+def make_splits(pool: List[dict], handwritten: List[dict], seed: int = 42, vec=None,
+                max_flags: Optional[int] = 1) -> Tuple[dict, dict]:
+    """Class-balanced test (60/action, hand-written counted first), val and train by quota.
+
+    * Test is drawn from ALL kept records (every test record is human-reviewed anyway).
+    * Train/val only use records the models and the generator mostly agree on: at most
+      `max_flags` disagreeing label fields (None = no filter). Records that fail the filter, and any
+      surplus above the train quota, go to `unused`.
     Groups (job templates) never cross splits; near-duplicates of test are dropped from train/val."""
     rng = random.Random(seed)
     vec = vec or global_vectorizer([r["utterance"] for r in pool + handwritten])
@@ -1059,13 +1085,18 @@ def make_splits(pool: List[dict], handwritten: List[dict], seed: int = 42, vec=N
     by_action: Dict[str, List[str]] = defaultdict(list)
     for g, rs in groups.items():
         by_action[rs[0]["labels"]["route_action"]].append(g)
-    train, val, shortfall = [], [], {}
+
+    def trusted(r: dict) -> bool:
+        return max_flags is None or len(r.get("disagree") or []) <= max_flags
+
+    train, val, unused, shortfall, tv_short = [], [], [], {}, {}
     for action in spec.ROUTE_ACTIONS:
         gs = sorted(by_action[action])
         rng.shuffle(gs)
         need_t = max(0, spec.TEST_PER_ACTION - hw_by_action[action])
         need_v = round(spec.VAL_N * spec.ACTION_WEIGHTS[action])
-        got_t = got_v = 0
+        need_tr = round(spec.TRAIN_N * spec.ACTION_WEIGHTS[action])
+        got_t = got_v = got_tr = 0
         rest = []
         for g in gs:                                   # greedy: fill test first, never exceed the quota
             n = len(groups[g])
@@ -1074,13 +1105,21 @@ def make_splits(pool: List[dict], handwritten: List[dict], seed: int = 42, vec=N
             else:
                 rest.append(g)
         for g in rest:
-            n = len(groups[g])
+            rows = [r for r in groups[g] if trusted(r)]
+            unused += [r for r in groups[g] if not trusted(r)]
+            n = len(rows)
+            if n == 0:
+                continue
             if got_v + n <= need_v:
-                val += groups[g]; got_v += n
+                val += rows; got_v += n
+            elif got_tr + n <= need_tr:
+                train += rows; got_tr += n
             else:
-                train += groups[g]
+                unused += rows
         if got_t + hw_by_action[action] < spec.TEST_PER_ACTION:
             shortfall[action] = spec.TEST_PER_ACTION - got_t - hw_by_action[action]
+        if got_v < need_v or got_tr < need_tr:
+            tv_short[action] = {"val": need_v - got_v, "train": need_tr - got_tr}
     # leakage removal (test is never touched)
     dropped = []
     test_txt = [r["utterance"] for r in test]
@@ -1100,7 +1139,7 @@ def make_splits(pool: List[dict], handwritten: List[dict], seed: int = 42, vec=N
         for r in part:
             r["split"] = name
     splits = {"train": train, "val": val, "test": test}
-    return splits, {"dropped": dropped, "shortfall": shortfall}
+    return splits, {"dropped": dropped, "shortfall": shortfall, "unused": unused, "train_val_shortfall": tv_short}
 
 
 def overlap_report(splits: Dict[str, List[dict]], vec=None) -> dict:
@@ -1126,7 +1165,8 @@ def test_hash(test: List[dict]) -> str:
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
 
-def stage_split(out_dir, seed: int = 42, handwritten_csv: Optional[str] = None, verbose: bool = True) -> dict:
+def stage_split(out_dir, seed: int = 42, handwritten_csv: Optional[str] = None, verbose: bool = True,
+                max_flags: Optional[int] = 1) -> dict:
     out = Path(out_dir)
     m = json.loads((out / "run_manifest.json").read_text())
     if m.get("test_frozen"):
@@ -1134,15 +1174,19 @@ def stage_split(out_dir, seed: int = 42, handwritten_csv: Optional[str] = None, 
     pool = read_jsonl(out / "candidates_reviewed.jsonl") or read_jsonl(out / "candidates.jsonl")
     hw = import_handwritten(handwritten_csv) if handwritten_csv else read_jsonl(out / "handwritten.jsonl")
     vec = global_vectorizer([r["utterance"] for r in pool + hw])
-    splits, extra = make_splits(pool, hw, seed, vec)
+    splits, extra = make_splits(pool, hw, seed, vec, max_flags)
     for k, v in splits.items():
         write_jsonl(out / f"{k}.jsonl", [flatten(r) | {"labels": r["labels"]} for r in v])
     write_jsonl(out / "leakage_dropped.jsonl", extra["dropped"])
-    export_review_csv(splits["test"], out / "test_review.csv")
+    write_jsonl(out / "unused.jsonl", extra["unused"])
+    export_review_csv([r for r in splits["test"] if r.get("source") != "human"], out / "test_review.csv",
+                      prefill_agreed=True)          # hand-written rows were already adjudicated by a human
     rep = overlap_report(splits, vec)
     cov = {k: dict(Counter(r["labels"]["route_action"] for r in v)) for k, v in splits.items()}
     update_manifest(out, split={"sizes": {k: len(v) for k, v in splits.items()}, "per_action": cov,
                                 "n_leakage_dropped": len(extra["dropped"]), "shortfall_test": extra["shortfall"],
+                                "max_flags_for_train_val": max_flags, "n_unused": len(extra["unused"]),
+                                "train_val_shortfall": extra["train_val_shortfall"],
                                 "handwritten_in_test": len(hw), "overlap": rep})
     if verbose:
         print({k: len(v) for k, v in splits.items()}, "shortfall:", extra["shortfall"], "| overlap zero:", rep["cross_split_overlap_is_zero"])
@@ -1196,6 +1240,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     s = sub.add_parser("split", help="grouped split + leakage removal + test_review.csv")
     s.add_argument("--out", default=DEFAULT_OUT)
     s.add_argument("--seed", type=int, default=42)
+    s.add_argument("--max-flags", type=int, default=1,
+                   help="train/val only use records with at most this many model-disagreement fields (-1 = no filter)")
     f = sub.add_parser("freeze", help="record sha256 of the reviewed test set")
     f.add_argument("--out", default=DEFAULT_OUT)
     v = sub.add_parser("verify")
@@ -1227,7 +1273,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         write_jsonl(Path(a.out) / "handwritten.jsonl", hw)
         print(f"imported {len(hw)} hand-written test messages")
     elif a.cmd == "split":
-        stage_split(a.out, a.seed)
+        stage_split(a.out, a.seed, max_flags=None if a.max_flags < 0 else a.max_flags)
     elif a.cmd == "freeze":
         print("sha256", stage_freeze(a.out))
     elif a.cmd == "verify":

@@ -411,3 +411,10 @@ def test_T_8_34_followup_slots_match_known():
         assert s["landmark"] == j["known"]["destination"]
         if j["known"].get("origin"):
             assert s["landmark_2"] == j["known"]["origin"]
+
+
+def test_T_8_35_review_label_typos_are_forgiven():
+    from data_gen import pipeline as P
+    lab = P.clean_corrected({"route_action": "compare", "clarify_field": "origin", "needs_live_data": "tru",
+                             "primary_mode": "bike", "refusal_reason": "none"})
+    assert lab["route_action"] == "compare_modes" and lab["clarify_field"] == "none" and lab["needs_live_data"] is True
