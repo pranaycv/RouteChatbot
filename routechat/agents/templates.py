@@ -53,6 +53,7 @@ REFUSAL_TEMPLATES: dict[str, str] = {
     "data_request": DATA_REQUEST,
     "unsafe_or_illegal": UNSAFE_OR_ILLEGAL,
     "out_of_scope_b2b": OUT_OF_SCOPE_B2B,
+    "out_of_scope_mode": TRANSIT_NOT_SUPPORTED,
     "booking_or_payment": BOOKING_OR_PAYMENT,
     "live_parking_or_inventory": LIVE_PARKING,
 }
