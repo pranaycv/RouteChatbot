@@ -446,3 +446,35 @@ def test_t_6_04_recorded_replies_pass_output_guard_rules():
     invented = dict(replies[0])
     invented["message"] = invented["message"].replace("4.2 km", "9 km")
     assert _guard_problems(invented)
+
+
+# --- The live path uses the shared client ---
+
+
+def test_the_live_writer_uses_the_shared_client(monkeypatch):
+    """OpenRouter or OpenAI is chosen in routechat.llm. The log line names the provider that answered."""
+    from routechat.agents import writer
+    from routechat.llm import LLMResult
+
+    asked: dict[str, Any] = {}
+
+    def complete(messages, model, temperature, schema):
+        asked.update(messages=messages, model=model, schema=schema)
+        text = json.dumps({"message": "Here is the route.", "mentioned_ids": ["closures"], "kind": "template"})
+        return LLMResult(text, 1200, 80, model, "openrouter", 5.0, 0.0)
+
+    lines: list[dict[str, Any]] = []
+    monkeypatch.setattr(writer, "complete", complete)
+    monkeypatch.setattr(writer, "stage_line", lambda *args, **kwargs: lines.append(kwargs))
+    draft = write_node(_planned())["draft"]
+    assert draft.kind == "llm"
+    assert draft.mentioned_ids == ["closures"]
+    assert asked["schema"] is ReplyDraft
+    assert SECRET not in json.dumps(asked["messages"])
+    assert lines[0]["api_calls"] == {"openrouter": 1}
+    assert (lines[0]["tokens_in"], lines[0]["tokens_out"]) == (1200, 80)
+
+
+def test_the_escalate_sentence_claims_no_checks():
+    assert "could check" not in ESCALATE
+    assert "…" not in ESCALATE

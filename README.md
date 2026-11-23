@@ -20,7 +20,7 @@ Copy `.env.example` to `.env` and fill in the keys locally. `.env` is never comm
 
 ## Run
 
-The app is the WP7 screen. Until the other stages are merged it runs the handbook example for every request:
+The app is the WP7 screen. It reads `.env`, and with an OpenAI or OpenRouter key it runs the real stages. Routes also need `MAPBOX_TOKEN` and `GRAPHHOPPER_KEY`. With no model key it shows the handbook example for every request. The classifier uses `prompted_small` until the fine-tuned adapter is on disk:
 
 ```bash
 uv run streamlit run routechat/app.py
