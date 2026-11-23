@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Sequence
 from typing import Any
 
+from routechat.agents.templates import ESCALATE
+from routechat.evidence import evidence_numbers
 from routechat.guards.input_guard import _mask_personal_data
 from routechat.logging import stage_line
 from routechat.schemas import DisplayedStop, FinalAnswer, LineString
@@ -91,20 +94,72 @@ def _keyword(check_id: str) -> str | None:
     return None
 
 
-def _mention_sentence(check_id: str) -> str:
-    if check_id == "closures":
-        return "I couldn't check for closures."
-    if check_id == "prefer:bike_lanes":
-        return "I couldn't confirm the bike lanes."
-    if check_id == "step_free":
-        return "I couldn't confirm that it is step-free."
-    if check_id == "hours" or check_id.startswith("hours:"):
+# A check that failed. Saying it could not be confirmed would hide what the verifier found.
+_UNMET = {
+    "avoid:highways": "It uses highways.",
+    "avoid:tolls": "It uses toll roads.",
+    "avoid:ferries": "It uses a ferry.",
+    "prefer:bike_lanes": "It has fewer bike lanes than you asked for.",
+    "flat": "It isn't as flat as you asked.",
+    "loop_distance": "It doesn't match the loop distance you asked for.",
+    "max_distance": "It is longer than your distance limit.",
+    "max_duration": "It takes longer than your time limit.",
+    "arrive_by": "It doesn't reach the end by your deadline.",
+    "closures": "There are closures on the way.",
+}
+_UNCONFIRMED = {
+    "closures": "I couldn't check for closures.",
+    "prefer:bike_lanes": "I couldn't confirm the bike lanes.",
+    "step_free": "I couldn't confirm that it is step-free.",
+    "flat": "I couldn't confirm that it is flat.",
+    "arrive_by": "I couldn't confirm that it meets your deadline.",
+}
+
+
+def _mention_sentence(check_id: str, status: str = "unverifiable") -> str:
+    """What to tell the user about a check that is not met, without its raw id."""
+    kind, _, name = check_id.partition(":")
+    name = name.replace("_", " ")
+    if status == "unmet":
+        if check_id in _UNMET:
+            return _UNMET[check_id]
+        if kind == "stop":
+            return "It misses a stop you need, or takes it out of order."
+        return f"It doesn't meet this request: {name or kind.replace('_', ' ')}."
+    if check_id in _UNCONFIRMED:
+        return _UNCONFIRMED[check_id]
+    if kind == "hours":
         return "I couldn't confirm the opening hours."
-    return f"I couldn't confirm {check_id.replace('_', ' ')}."
+    if kind == "avoid":
+        return f"I couldn't confirm that it avoids {name}."
+    return f"I couldn't confirm the {name or kind.replace('_', ' ')}."
 
 
-def _allowed_numbers(candidate: Any | None, report: Any | None) -> dict[str, set[float]]:
+def _other_routes(state: dict[str, Any], chosen: Any | None) -> list[Any]:
+    """The routes a compare request also measured. A reply may give their distance and time."""
+    return [
+        candidate
+        for candidate in state.get("candidates") or []
+        if not _field(candidate, "error") and candidate is not chosen
+    ]
+
+
+def _allowed_numbers(
+    candidate: Any | None, report: Any | None, others: Sequence[Any] = ()
+) -> dict[str, set[float]]:
+    """Numbers from the route, the verifier's evidence, the compared route, and the sponsor."""
     allowed: dict[str, set[float]] = {"km": set(), "min": set(), "m": set()}
+    for other in others:
+        km = _round_km(_field(other, "distance_m"))
+        minutes = _round_minutes(_duration_s(other))
+        if km is not None:
+            allowed["km"].add(float(km))
+        if minutes is not None:
+            allowed["min"].add(float(minutes))
+    if report is not None:
+        for check in _field(report, "checks"):
+            for unit, values in evidence_numbers(_field(check, "evidence")).items():
+                allowed[unit] |= values
     if candidate is not None:
         km = _round_km(_field(candidate, "distance_m"))
         minutes = _round_minutes(_duration_s(candidate))
@@ -136,7 +191,9 @@ def _hours_keyword_ok(text: str) -> bool:
     return "hours" in lowered or re.search(r"\bopen\b", lowered) is not None
 
 
-def failed_check(draft: Any, report: Any | None, candidate: Any | None) -> str | None:
+def failed_check(
+    draft: Any, report: Any | None, candidate: Any | None, others: Sequence[Any] = ()
+) -> str | None:
     """Return the first failing check name, or None when the draft may be shown."""
     message = _field(draft, "message")
     lowered = message.lower()
@@ -159,7 +216,7 @@ def failed_check(draft: Any, report: Any | None, candidate: Any | None) -> str |
         return "sponsorship"
     if any(phrase in lowered for phrase in _PROMISES):
         return "promises"
-    allowed = _allowed_numbers(candidate, report)
+    allowed = _allowed_numbers(candidate, report, others)
     for match in _NUMBER_RE.finditer(message):
         value = float(match.group(1))
         unit = _unit(match.group(2))
@@ -174,11 +231,14 @@ def failed_check(draft: Any, report: Any | None, candidate: Any | None) -> str |
 def fallback_text(candidate: Any | None, report: Any | None) -> str:
     """A fixed sentence. It uses only numbers and warnings already on the route."""
     parts: list[str] = []
+    handoff = report is not None and _field(report, "decision") == "handoff"
+    if handoff:
+        parts.append(ESCALATE)
     if candidate is not None and _field(candidate, "distance_m") is not None:
         km = _round_km(_field(candidate, "distance_m"))
         minutes = _round_minutes(_duration_s(candidate))
         climb = _round_metres(_field(candidate, "ascend_m"))
-        sentence = f"Here's a {km} km route"
+        sentence = f"The closest route I found is {km} km" if handoff else f"Here's a {km} km route"
         if minutes is not None:
             sentence += f", about {minutes} minutes"
         if climb is not None:
@@ -191,8 +251,11 @@ def fallback_text(candidate: Any | None, report: Any | None) -> str:
     else:
         parts.append("I couldn't finish a route for that trip.")
     if report is not None:
+        status = {_field(check, "id"): _field(check, "status") for check in _field(report, "checks")}
         for check_id in _field(report, "must_mention"):
-            parts.append(_mention_sentence(check_id))
+            sentence = _mention_sentence(check_id, status.get(check_id, "unverifiable"))
+            if sentence not in parts:
+                parts.append(sentence)
         sponsored = _field(report, "sponsored")
         if sponsored is not None:
             parts.append(f"Sponsored: {_field(sponsored, 'name')}.")
@@ -231,7 +294,7 @@ def output_guard(state: dict[str, Any]) -> dict[str, FinalAnswer]:
     draft = state["draft"]
     report = state.get("report")
     candidate = _chosen(state)
-    failed = failed_check(draft, report, candidate)
+    failed = failed_check(draft, report, candidate, _other_routes(state, candidate))
     geometry = _geometry(candidate)
     stops = _stops(state)
     if failed is None:

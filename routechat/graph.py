@@ -59,6 +59,8 @@ NODE_ORDER = (
 )
 _EXTRACT_ACTIONS = frozenset({"plan", "replan", "compare_modes", "lookup_only"})
 _WRITE_ACTIONS = frozenset({"clarify", "escalate", "refuse"})
+# The ends of the trip the extractor can confirm. It has no field for a stop of unknown kind.
+_PLACE_FIELDS = frozenset({"origin", "destination"})
 
 NodeFn = Callable[..., dict]
 
@@ -81,7 +83,7 @@ class TripState(TypedDict, total=False):
     revision_count: int
     deadline: float  # time.monotonic() budget, written by the graph or the app
     guard: GuardResult  # WP1
-    classification: RouteClassification  # WP2
+    classification: RouteClassification  # WP2; the graph relabels a settled or stale clarify
     constraints: ConstraintSet  # WP3
     places: list[ResolvedPlace]  # WP4
     candidates: list[RouteCandidate]  # WP4
@@ -124,20 +126,29 @@ def after_guard(state: TripState) -> str:
     raise ValueError(f"unknown guard decision: {decision}")
 
 
+def _asks_for_a_place(classification: Any) -> bool:
+    return (
+        _field(classification, "route_action") == "clarify"
+        and _field(classification, "clarify_field") in _PLACE_FIELDS
+    )
+
+
 def after_classify(state: TripState) -> str:
     """plan, replan, compare_modes, and lookup_only go to the extractor.
 
-    clarify, escalate, and refuse go to the writer. A clarify that is still
-    unresolved after one follow-up also goes to the writer; the write wrapper
-    relabels that case as escalate before the writer runs.
+    So does a clarify about the origin or the destination: the extractor reads
+    the places, so it decides whether one is missing. The handbook sends every
+    clarify to the writer. Other clarifies, escalate, and refuse go to the
+    writer. A clarify still unresolved after one follow-up is relabelled as
+    escalate by the write wrapper before the writer runs.
     """
     if _finished(state):
         return END
     action = _field(state["classification"], "route_action")
     if action in _EXTRACT_ACTIONS:
         return "extract"
-    if action == "clarify" and state.get("clarify_count", 0) >= 1:
-        return "write"
+    if _asks_for_a_place(state["classification"]):
+        return "extract"
     if action in _WRITE_ACTIONS:
         return "write"
     raise ValueError(f"unknown route_action: {action}")
@@ -187,6 +198,38 @@ def after_write(state: TripState) -> str:
     return "guard_out"
 
 
+def _relabel(classification: Any, action: str, clarify_field: str) -> Any:
+    changes = {"route_action": action, "clarify_field": clarify_field}
+    if isinstance(classification, RouteClassification):
+        return classification.model_copy(update=changes)
+    return {**classification, **changes}
+
+
+def _as_trip(state: TripState) -> TripState:
+    """The state the extractor reads when it double-checks a clarify.
+
+    It is shown a trip label, because its prompt is written for trips and a
+    clarify label would tell it the answer.
+    """
+    action = "plan" if state.get("known") is None else "replan"
+    return {**state, "classification": _relabel(state["classification"], action, "none")}  # type: ignore[typeddict-item]
+
+
+def _settle_clarify(state: TripState, trip: TripState, update: dict) -> dict:
+    """Keep the clarify only if the extractor also finds a place missing.
+
+    When it names the missing end, the question asks for that one. When the
+    trip is complete, or only has too many stops, it goes on as a trip. An
+    unreadable message keeps the classifier's question.
+    """
+    missing = _field(update["constraints"], "missing_field")
+    if missing is None:
+        return {**update, "classification": trip["classification"]}
+    if missing in _PLACE_FIELDS:
+        return {**update, "classification": _relabel(state["classification"], "clarify", missing)}
+    return update
+
+
 def _escalate_stale_clarify(state: TripState) -> tuple[TripState, dict]:
     """Turn a second clarify into escalate before the writer sees the state.
 
@@ -202,10 +245,7 @@ def _escalate_stale_clarify(state: TripState) -> tuple[TripState, dict]:
         return state, {}
     if state.get("clarify_count", 0) < 1:
         return state, {}
-    if isinstance(classification, RouteClassification):
-        updated = classification.model_copy(update={"route_action": "escalate", "clarify_field": "none"})
-    else:
-        updated = {**classification, "route_action": "escalate", "clarify_field": "none"}
+    updated = _relabel(classification, "escalate", "none")
     merged = dict(state)
     merged["classification"] = updated
     return merged, {"classification": updated}  # type: ignore[return-value]
@@ -302,6 +342,9 @@ def _call_node(stage: str, fn: NodeFn, state: TripState) -> dict:
     if stage == "write":
         call_state, escalated = _escalate_stale_clarify(state)
         prefix.update(escalated)
+    checking_clarify = stage == "extract" and _asks_for_a_place(state["classification"])
+    if checking_clarify:
+        call_state = _as_trip(state)
     try:
         update = fn(call_state)
     except Exception as exc:
@@ -312,6 +355,8 @@ def _call_node(stage: str, fn: NodeFn, state: TripState) -> dict:
         return _abort(state, stage, "system_error", TypeError.__name__, latency_ms)
     if stage == "verify":
         update = _cap_revision(state, update)
+    if checking_clarify:
+        update = _settle_clarify(state, call_state, update)
     return {**prefix, **update}
 
 

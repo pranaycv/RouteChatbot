@@ -61,7 +61,7 @@ from routechat.verify.decide import verify_node
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLIES = ROOT / "tests" / "fixtures" / "writer_replies.json"
-PROMPT = ROOT / "prompts" / "writer_v1.md"
+PROMPT = ROOT / "prompts" / "writer_v2.md"
 SECRET = "SECRET-RAW-UTTERANCE"
 
 # WP7 banned phrases, plus the writer rule against "safe" and "guaranteed".
@@ -446,3 +446,50 @@ def test_t_6_04_recorded_replies_pass_output_guard_rules():
     invented = dict(replies[0])
     invented["message"] = invented["message"].replace("4.2 km", "9 km")
     assert _guard_problems(invented)
+
+
+# --- The live path uses the shared client ---
+
+
+def test_the_live_writer_uses_the_shared_client(monkeypatch):
+    """OpenRouter or OpenAI is chosen in routechat.llm. The log line names the provider that answered."""
+    from routechat.agents import writer
+    from routechat.llm import LLMResult
+
+    asked: dict[str, Any] = {}
+
+    def complete(messages, model, temperature, schema):
+        asked.update(messages=messages, model=model, schema=schema)
+        text = json.dumps({"message": "Here is the route.", "mentioned_ids": ["closures"], "kind": "template"})
+        return LLMResult(text, 1200, 80, model, "openrouter", 5.0, 0.0)
+
+    lines: list[dict[str, Any]] = []
+    monkeypatch.setattr(writer, "complete", complete)
+    monkeypatch.setattr(writer, "stage_line", lambda *args, **kwargs: lines.append(kwargs))
+    draft = write_node(_planned())["draft"]
+    assert draft.kind == "llm"
+    assert draft.mentioned_ids == ["closures"]
+    assert asked["schema"] is ReplyDraft
+    assert SECRET not in json.dumps(asked["messages"])
+    assert lines[0]["api_calls"] == {"openrouter": 1}
+    assert (lines[0]["tokens_in"], lines[0]["tokens_out"]) == (1200, 80)
+
+
+def test_the_escalate_sentence_claims_no_checks():
+    assert "could check" not in ESCALATE
+    assert "…" not in ESCALATE
+
+
+def test_facts_round_the_evidence_and_carry_the_compared_route():
+    report = running_report()
+    checks = [report.checks[0].model_copy(update={"evidence": "4220.55 m; allowed range 4500 to 5500 m."})]
+    other = running_candidate().model_copy(
+        update={"id": "gh_walk_1", "mode": "walk", "distance_m": 3105.0, "duration_s": 2242.0, "duration_traffic_s": None}
+    )
+    state = _planned(
+        report=report.model_copy(update={"checks": checks}), candidates=[running_candidate(), other]
+    )
+    facts = build_facts(state)
+    assert facts["checks"][0]["evidence"] == "4.22 km; allowed range 4.5 to 5.5 km."
+    assert facts["other_route"] == {"mode": "walk", "distance_km": 3.1, "duration_min": 37}
+    assert build_facts(_planned())["other_route"] is None

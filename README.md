@@ -20,7 +20,7 @@ Copy `.env.example` to `.env` and fill in the keys locally. `.env` is never comm
 
 ## Run
 
-The app is the WP7 screen. Until the other stages are merged it runs the handbook example for every request:
+The app is the WP7 screen. It reads `.env`, and with an OpenAI or OpenRouter key it runs the real stages. Routes also need `MAPBOX_TOKEN` and `GRAPHHOPPER_KEY`. With no model key it shows the handbook example for every request. The classifier uses `prompted_small` until the fine-tuned adapter is on disk:
 
 ```bash
 uv run streamlit run routechat/app.py
@@ -64,7 +64,7 @@ routechat/guards/        WP1 input guard and WP7 output guard
 routechat/agents/writer.py WP6 reply, template or one model call
 routechat/logging.py     WP7 masked JSON log
 routechat/app.py         WP7 Streamlit screen
-prompts/writer_v1.md     WP6 prompt
+prompts/writer_v2.md     WP6 prompt
 prompts/CHANGELOG.md     prompt changes
 prompts/judge_v1.md      WP10 judge prompt
 tests/test_graph.py      T-0-01 to T-0-05
@@ -115,7 +115,7 @@ ticket = state.get("handoff")
 
 ## Branches
 
-`allow` goes to the classifier. `clarify`, `refuse`, and `fixed_reply` go to the writer. `plan`, `replan`, `compare_modes`, and `lookup_only` go to the extractor. A complete constraint set goes to the map tools; a missing field or too many stops goes to the writer. The verifier may send the request back to the map tools once. A second `revise` does not loop. A clarify that is still unclear after one follow-up (`clarify_count >= 1`) is written as `escalate`.
+`allow` goes to the classifier. `clarify`, `refuse`, and `fixed_reply` go to the writer. `plan`, `replan`, `compare_modes`, and `lookup_only` go to the extractor. So does a `clarify` about the origin or the destination. A complete constraint set goes to the map tools; a missing field or too many stops goes to the writer. The verifier may send the request back to the map tools once. A second `revise` does not loop. A clarify that is still unclear after one follow-up (`clarify_count >= 1`) is written as `escalate`.
 
 ## Decisions other packages depend on
 
@@ -124,6 +124,7 @@ These are fixed with schemas v1. A change is a pull request reviewed by the inte
 - **Null is not zero, and null is not an empty list.** On a route, `closures: null` means the provider did not say. `closures: []` means it checked and found none. The same rule applies to opening hours: null means unknown, not closed. Measured lengths follow the same idea: null means the fact is missing, 0 means it was measured and is zero.
 - **One writer per state field.** A stage returns only its own keys. It does not call the next stage. The graph is the only place that chooses the next node.
 - **One revise.** The verifier sets `revision_count` to 1 when it wants another pass through the map tools. If it asks again, the graph sets the count to 2 and sends the request to the writer.
+- **The extractor decides whether a place is missing.** The classifier can miss a place that is in the message, so a `clarify` about the origin or the destination is checked by the extractor. If it finds both, the graph relabels the turn as `plan`, or `replan` on a known trip. Otherwise the bot asks for the end the extractor could not find. The handbook sends every `clarify` to the writer. The classifier's own labels and its stage line do not change.
 - **A second clarify is escalate.** The app keeps `clarify_count` between turns. When that count is already 1 or more, the graph relabels the action as `escalate` before the writer runs.
 - **Failures stop the run.** A raised exception or a spent 30-second budget writes a handoff (`system_error` or `timeout`) and the system-error sentence, then ends. The log stores the exception type. It does not store the exception message or the raw request, because this can happen before the input guard has masked the text.
 - **Place search is limited to Canada for now.** `maps.geocode_country` is `ca`. Set it to null to resolve places in any country, or to another ISO 3166 alpha-2 code. No city's coordinates are built into the configuration.

@@ -20,3 +20,9 @@ Every prompt change gets an entry: what changed, why, and the metric before and 
 - Why: WP6. The wording follows policy P-03 (say what was not confirmed), P-04 (no booking or promise), P-05 (label a sponsor), and P-08 (a handoff says a person has the trip).
 - Metric before: none. This is the first version.
 - Metric after: not measured. Faithfulness and disclosure completeness wait for the WP10 judge.
+
+## writer_v2
+
+- What: an unmet check is stated as failed, an unverifiable one as not confirmed. Measurements are copied as written. A compare request gets one sentence on the other mode. Nothing is said about stops, checks or sponsors that are not there. The facts block gains other_route, and its evidence is rounded (routechat/evidence.py).
+- Why: the live GUI test on 23 Nov. Two correct handoffs were replaced by the fallback sentence because the guard did not know the numbers in the evidence, and a compare reply left out the second mode.
+- Metric before and after: not measured. Faithfulness and disclosure completeness wait for the WP10 judge.

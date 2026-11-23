@@ -261,3 +261,22 @@ def test_unsupported_mode_gets_direct_reply_without_ticket(mode, decision):
     assert state["report"].decision == decision
     assert template_message(state) == mode_not_supported_text(mode)
     assert request_outcome(state) == decision
+
+
+@pytest.mark.parametrize(
+    ("constraints", "decision"),
+    [
+        ({}, "accept"),
+        ({"avoid": ["highways"]}, "revise"),
+        ({"required_accessibility": True}, "handoff"),
+    ],
+)
+def test_verify_node_logs_one_stage_line(monkeypatch, constraints, decision):
+    calls = []
+    monkeypatch.setattr("routechat.verify.decide.stage_line", lambda *args: calls.append(args))
+    state = _state(**constraints) | {"request_id": "request-1"}
+    assert verify_node(state)["report"].decision == decision
+
+    (stage, request_id, logged_decision, duration_ms), = calls
+    assert (stage, request_id, logged_decision) == ("verify", "request-1", decision)
+    assert duration_ms >= 0

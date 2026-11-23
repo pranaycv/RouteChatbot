@@ -1,11 +1,13 @@
 """Evaluate route candidates and return the verifier's graph state update."""
 
 import re
+from time import monotonic
 from datetime import datetime, timezone
 from math import inf, isfinite
 from uuid import uuid4
 
 from routechat.config import get_settings
+from routechat.logging import stage_line
 from routechat.schemas import (
     Check,
     ConstraintSet,
@@ -208,7 +210,17 @@ def _handoff(state, constraints, reason, route=None, checks=()):
 
 
 def verify_node(state):
-    """Check every viable route and accept, request one retry, or hand off."""
+    """Check the route candidates and log the resulting decision."""
+    started = monotonic()
+    update = _verify(state)
+    stage_line(
+        "verify", state.get("request_id", ""), update["report"].decision,
+        (monotonic() - started) * 1000,
+    )
+    return update
+
+
+def _verify(state):
     constraints = ConstraintSet.model_validate(state["constraints"])
     classification = RouteClassification.model_validate(state["classification"])
     places = [ResolvedPlace.model_validate(place) for place in state.get("places", [])]
