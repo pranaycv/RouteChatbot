@@ -77,7 +77,9 @@ def train(args: argparse.Namespace) -> dict:
     if args.subset is not None:
         data["train"] = data["train"].shuffle(seed=cfg["seed"]).select(range(min(args.subset, len(data["train"]))))
     tokenizer = AutoTokenizer.from_pretrained(settings["base_model"])
-    model = AutoModelForCausalLM.from_pretrained(settings["base_model"], dtype=torch.float16 if torch.cuda.is_available() else torch.float32)
+    # Base weights stay fp32; SFTConfig(fp16=True) runs mixed precision. A fp16 base with fp16 LoRA
+    # parameters trips the gradient scaler ("attempting to unscale FP16 gradients"), fp32 does not.
+    model = AutoModelForCausalLM.from_pretrained(settings["base_model"])
     lora = LoraConfig(**settings["lora"])
     sft = SFTConfig(output_dir=str(args.out), **settings["sft"])
     trainer = SFTTrainer(model=model, args=sft, train_dataset=data["train"], eval_dataset=data["validation"], processing_class=tokenizer, peft_config=lora)
