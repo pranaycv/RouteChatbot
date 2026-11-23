@@ -24,7 +24,7 @@ This branch only adds new files. It does not change any file owned by another pa
 ```bash
 FIXTURES=replay uv run pytest                     # all tests, WP0's and these
 FIXTURES=replay uv run python -m eval.run_eval --all
-uv run python -m eval.cost_model --logs logs/<run_id>.jsonl --success eval/results/end_to_end.csv
+uv run python -m eval.cost_model --logs logs/<run_id>_D2.jsonl --success eval/results/end_to_end.csv
 RUN_JUDGE=1 uv run python -m eval.run_eval --e2e   # D2 run with the LLM judge (needs an API key)
 uv run python -m eval.judge --agreement report/judge_grading_A.csv report/judge_grading_B.csv
 uv run python -m eval.judge --agreement report/judge_grading_A.csv   # one grader only
@@ -74,7 +74,7 @@ bash eval/final_run.sh                             # the final run, once every s
   Kaggle's free GPU (WP9). Classifier hosting assumes CPU [WP9 to confirm].
 
 - The run log comes from WP7's logger (`routechat/logging.py`, merged Nov 23). `run_eval` points it at
-  `logs/<run_id>.jsonl` with `ROUTECHAT_LOG`, so each evaluation run has its own file; the classifier step
+  `logs/<run_id>_<dataset>.jsonl` (D2, D3) with `ROUTECHAT_LOG`, so each run and dataset has its own file; the classifier step
   writes one file per backend. The runner no longer writes log lines itself.
 
 ## Checked on Nov 22 against the other branches

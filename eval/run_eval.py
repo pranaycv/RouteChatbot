@@ -65,7 +65,7 @@ def fresh_log(path: Path) -> Path:
 
 
 def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, list[dict]]:
-    """Send each record through the real graph; WP7's logger writes logs/<run_id>.jsonl.
+    """Send each record through the real graph; WP7's logger writes logs/<run_id>_<dataset>.jsonl.
 
     Returns the log path and, per item, the predicted ConstraintSet. The ConstraintSet is kept out of
     the app log on purpose (the origin can be a street address); it is saved only in the evaluation
@@ -77,7 +77,8 @@ def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, lis
     """
     from routechat.graph import invoke  # WP0
     os.environ["RUN_ID"] = run_id; os.environ["EVAL_DATASET"] = dataset
-    log_path = fresh_log(Path("logs") / f"{run_id}.jsonl")
+    # One file per dataset, so --all (D2 then D3 under one RUN_ID) keeps both logs.
+    log_path = fresh_log(Path("logs") / f"{run_id}_{dataset}.jsonl")
     # WP7's logger (routechat/logging.py) writes the stage lines and one request line per request.
     # Pointing ROUTECHAT_LOG at this run's file keeps each evaluation run in its own log.
     os.environ["ROUTECHAT_LOG"] = str(log_path)

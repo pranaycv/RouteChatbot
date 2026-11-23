@@ -20,7 +20,7 @@ Rules:
 - Count a false met only when you can show the requirement failed. If unsure, write `unverifiable`.
 
 Then: `uv run python -m eval.route_review --score report/route_review_sheet.csv` prints the false-met
-rate and writes `eval/datasets/d2_truth.csv`. Rerun `uv run python -m eval.run_eval --e2e --logs logs/<run_id>.jsonl`
+rate and writes `eval/datasets/d2_truth.csv`. Rerun `uv run python -m eval.run_eval --e2e --logs logs/<run_id>_D2.jsonl`
 and trip success uses the reviewers' answers for those 50 routes; the other accepted routes keep the
 verifier's own statuses and are marked `verifier_only`.
 
