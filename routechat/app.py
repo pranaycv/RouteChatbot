@@ -7,8 +7,8 @@
 The visual language follows EyesRhythm: a light paper background, Inter-like
 type, soft white cards, and one blue. The map is a street basemap with the
 route line and the place pins drawn on top. Places and checks sit under the
-map. STUBS=1 is the default until the other stage packages are merged, so
-this screen can run on its own.
+map. Keys come from .env. With no model key, and no recorded replies to
+replay, the screen shows the saved sample trip.
 """
 
 from __future__ import annotations
@@ -19,15 +19,37 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-os.environ.setdefault("STUBS", "1")
-
 import orjson
 import pydeck as pdk
 import streamlit as st
+from dotenv import load_dotenv
 
+from routechat.classifier.predict import adapter_dir
+from routechat.config import get_settings
+from routechat.evidence import tidy_evidence
 from routechat.graph import invoke
 from routechat.logging import append_handoff, mask_for_log, read_handoffs
 from routechat.stubs import RUNNING_UTTERANCE
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _configure() -> None:
+    """Read .env, then fill the settings it leaves blank. A value already set always wins.
+
+    ROUTECHAT_DOTENV names another file; an empty value reads none, as the tests do.
+    """
+    dotenv = os.environ.get("ROUTECHAT_DOTENV", str(_ROOT / ".env"))
+    if dotenv:
+        load_dotenv(dotenv)
+    if not os.environ.get("STUBS"):
+        has_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+        replay = os.environ.get("FIXTURES", "").strip().lower() == "replay"
+        os.environ["STUBS"] = "0" if has_key or replay else "1"
+    # The fine-tuned classifier is the default backend. Until its adapter is on disk, prompt instead.
+    if not os.environ.get("CLASSIFIER_BACKEND") and not adapter_dir().exists():
+        os.environ["CLASSIFIER_BACKEND"] = "prompted_small"
+
 
 _ROUTE = [47, 120, 196]
 _ROUTE_CASING = [255, 255, 255]
@@ -496,7 +518,7 @@ def _init() -> None:
     st.session_state.setdefault("history", [])
     st.session_state.setdefault("known", None)
     st.session_state.setdefault("clarify_count", 0)
-    st.session_state.setdefault("turn_index", 0)
+    st.session_state.setdefault("pending", None)
     st.session_state.setdefault("last", None)
     st.session_state.setdefault("composer_epoch", 0)
 
@@ -506,7 +528,7 @@ def _new_chat() -> None:
     st.session_state.history = []
     st.session_state.known = None
     st.session_state.clarify_count = 0
-    st.session_state.turn_index = 0
+    st.session_state.pending = None
     st.session_state.last = None
     st.session_state.composer_epoch = int(st.session_state.get("composer_epoch", 0)) + 1
 
@@ -530,14 +552,30 @@ def _minutes(candidate: Any) -> int | None:
     return int(round(seconds / 60))
 
 
+def _with_pending(utterance: str) -> str:
+    """The message a follow-up question is waiting on, then its answer.
+
+    A clarify stops before extraction, so "From Union Station" alone has no trip
+    to attach to. The guard reads the joined text, and an answer that would pass
+    the length limit goes alone.
+    """
+    pending = st.session_state.pending
+    if not pending:
+        return utterance
+    joined = f"{pending.rstrip(' .')}. {utterance}"
+    return joined if len(joined) <= get_settings().guard.max_chars else utterance
+
+
 def _ask(utterance: str) -> None:
     """Run one turn and remember the reply, the constraints, and the map state."""
     request_id = f"r_{uuid4().hex[:8]}"
+    request = _with_pending(utterance)
     state = invoke(
         {
             "request_id": request_id,
-            "utterance": utterance,
-            "turn_index": st.session_state.turn_index,
+            "utterance": request,
+            # 1 is a follow-up on a known trip, as in the label guide and D1. Never 2.
+            "turn_index": 0 if st.session_state.known is None else 1,
             "known": st.session_state.known,
             "clarify_count": st.session_state.clarify_count,
             "revision_count": 0,
@@ -547,21 +585,26 @@ def _ask(utterance: str) -> None:
     answer = _field(final, "text", "I couldn't finish that trip. Please try again in a minute.")
     st.session_state.history.append({"role": "user", "content": utterance})
     st.session_state.history.append({"role": "assistant", "content": answer})
-    st.session_state.turn_index += 1
     constraints = state.get("constraints")
-    if constraints is not None:
-        st.session_state.known = constraints
     action = _field(state.get("classification"), "route_action")
+    # A clarify may carry a half-read trip. The pending message is what the answer is joined to.
+    if constraints is not None and action != "clarify":
+        st.session_state.known = constraints
+    asked_before = st.session_state.clarify_count > 0
     if action == "clarify":
         st.session_state.clarify_count += 1
-    elif action in {"plan", "replan", "compare_modes", "lookup_only"}:
+        st.session_state.pending = request
+    elif action is not None:
         st.session_state.clarify_count = 0
+        st.session_state.pending = None
     report = state.get("report")
-    if _field(report, "decision") == "handoff" or state.get("handoff") is not None:
+    escalated = action == "escalate"
+    if escalated or _field(report, "decision") == "handoff" or state.get("handoff") is not None:
+        reason = "still_unclear" if asked_before else "needs_a_person"
         ticket = state.get("handoff") or {
             "request_id": request_id,
-            "reason": _field(report, "handoff_reason") or "handoff",
-            "redacted_request": mask_for_log(utterance),
+            "reason": reason if escalated else _field(report, "handoff_reason") or "handoff",
+            "redacted_request": mask_for_log(request),
         }
         if hasattr(ticket, "model_dump"):
             ticket = ticket.model_dump()
@@ -588,6 +631,12 @@ def _view(coords: list[list[float]]) -> pdk.ViewState:
 def _pretty_id(raw: str) -> str:
     parts = str(raw).replace("_", " ").split(":")
     return " · ".join(part.strip().title() for part in parts if part.strip())
+
+
+def _words(raw: str) -> str:
+    """fuel_or_charging as Fuel or charging."""
+    text = raw.replace("_", " ").strip()
+    return text[:1].upper() + text[1:]
 
 
 def _sponsor_label_layer(sponsors: list[Any]) -> pdk.Layer:
@@ -771,6 +820,7 @@ def _map(state: dict[str, Any]) -> None:
     if sponsored is not None:
         layers.append(_sponsor_label_layer([sponsored]))
     if not layers:
+        _base_map()
         return
     focus = coords or [point["coordinates"] for point in points]
     catalog = _shown_catalog(sponsored)
@@ -878,7 +928,7 @@ def _checks(state: dict[str, Any]) -> None:
             f"<span class='rc-pip {escape(status)}'></span>"
             "<div>"
             f"<b>{escape(_pretty_id(str(_field(check, 'id') or '')))}</b>"
-            f"<p>{escape(str(_field(check, 'evidence') or ''))}</p>"
+            f"<p>{escape(tidy_evidence(str(_field(check, 'evidence') or '')))}</p>"
             "</div>"
             f"<span class='rc-badge {escape(status)}'>{escape(status)}</span>"
             "</div>"
@@ -889,7 +939,7 @@ def _checks(state: dict[str, Any]) -> None:
         detail = " · ".join(
             part
             for part in (
-                str(_field(sponsored, "category") or "Place"),
+                _words(str(_field(sponsored, "category") or "Place")),
                 f"rating {_field(sponsored, 'rating')}",
                 away,
             )
@@ -928,7 +978,7 @@ def _support() -> None:
         blocks.append(
             "<div class='rc-ticket'>"
             f"<div class='rc-kicker'>{escape(str(ticket.get('request_id', '')))}</div>"
-            f"<b>{escape(str(reason))}</b>"
+            f"<b>{escape(_words(str(reason)))}</b>"
             f"<p>{escape(str(text))}</p>"
             "</div>"
         )
@@ -939,7 +989,7 @@ def _support() -> None:
 
 
 def _base_map() -> None:
-    """Downtown Toronto, shown before a route exists so the map already fills the screen."""
+    """Downtown Toronto, shown whenever there is no route or place to draw."""
     catalog = _shown_catalog()
     deck = pdk.Deck(
         layers=_catalog_layers(catalog),
@@ -1047,6 +1097,7 @@ def _conversation(sample: bool) -> str | None:
 
 
 def main() -> None:
+    _configure()
     st.set_page_config(page_title="RouteChat", page_icon="🗺️", layout="wide")
     st.markdown(_CSS, unsafe_allow_html=True)
     _init()

@@ -11,9 +11,10 @@ from datetime import datetime, timedelta, timezone
 import orjson
 import pytest
 
-from routechat.guards.output_guard import output_guard
+from routechat.agents.templates import ESCALATE
+from routechat.guards.output_guard import _mention_sentence, output_guard
 from routechat.logging import RETENTION_DAYS, log_event, prune_expired
-from routechat.schemas import ReplyDraft, SponsoredSuggestion
+from routechat.schemas import Check, ReplyDraft, SponsoredSuggestion
 from routechat.stubs import (
     RUNNING_REPLY,
     running_candidate,
@@ -133,3 +134,78 @@ def test_t_7_07_a_log_line_masks_contact_details_and_addresses(log_file):
     kept = log_file.read_text(encoding="utf-8")
     assert "stale" not in kept
     assert "[ADDRESS]" in kept
+
+
+# --- Numbers from the checks and the compared route; what the fallback says ---
+
+
+def _handoff_report(*checks: Check):
+    return running_report().model_copy(
+        update={
+            "decision": "handoff",
+            "handoff_reason": "requirements_not_met",
+            "checks": list(checks),
+            "must_mention": [check.id for check in checks if check.status != "met"],
+        }
+    )
+
+
+_LOOP = Check(
+    id="loop_distance", status="unmet", hard=True, evidence="4220.55 m; allowed range 4500 to 5500 m."
+)
+_HIGHWAY = Check(
+    id="avoid:highways", status="unmet", hard=True, evidence="25342.1 m on motorway or trunk roads (maximum 200 m)."
+)
+
+
+def test_a_reply_may_use_the_numbers_in_the_evidence(log_file):
+    message = "The loop is 4.22 km, outside the 4.5 to 5.5 km you need."
+    state = _state(message, mentioned=["loop_distance"], report=_handoff_report(_LOOP))
+    assert output_guard(state)["final"].text == message
+    invented = message.replace("4.22 km", "4.9 km")
+    state = _state(invented, mentioned=["loop_distance"], report=_handoff_report(_LOOP))
+    assert output_guard(state)["final"].used_fallback_template is True
+
+
+def test_a_compare_reply_may_use_the_other_route_and_nothing_else(log_file):
+    other = running_candidate().model_copy(
+        update={"id": "gh_walk_1", "mode": "walk", "distance_m": 3100.0, "duration_s": 2220.0, "duration_traffic_s": None}
+    )
+    report = running_report().model_copy(update={"must_mention": []})
+    message = "The bike route is 4.2 km, about 18 minutes. Walking is 3.1 km, about 37 minutes."
+    state = _state(message, mentioned=[], report=report)
+    state["candidates"].append(other)
+    assert output_guard(state)["final"].text == message
+    # The same reply is refused when nothing was compared, or when the other route failed.
+    assert output_guard(_state(message, mentioned=[], report=report))["final"].used_fallback_template is True
+    state["candidates"][1] = other.model_copy(update={"error": "no_route"})
+    assert output_guard(state)["final"].used_fallback_template is True
+
+
+def test_the_fallback_says_what_failed_and_that_a_person_has_the_trip(log_file):
+    closures = Check(id="closures", status="unverifiable", hard=True, evidence="Closure data is unavailable.")
+    text = output_guard(
+        _state("9 km", mentioned=[], report=_handoff_report(_HIGHWAY, _LOOP, closures))
+    )["final"].text
+    assert text.startswith(ESCALATE)
+    assert "The closest route I found is 4.2 km" in text
+    assert "It uses highways." in text
+    assert "loop distance you asked for" in text
+    assert "I couldn't check for closures." in text
+    assert "avoid:" not in text and "_" not in text
+
+
+@pytest.mark.parametrize("status", ["unmet", "unverifiable"])
+@pytest.mark.parametrize(
+    "check_id",
+    [
+        "stop:canadian_tire", "hours:canadian_tire", "avoid:highways", "avoid:tolls", "avoid:ferries",
+        "avoid:unpaved", "prefer:bike_lanes", "prefer:quiet_roads", "flat", "max_distance", "max_duration",
+        "loop_distance", "arrive_by", "closures", "step_free",
+    ],
+)
+def test_a_fallback_sentence_never_shows_a_raw_check_id(check_id: str, status: str):
+    sentence = _mention_sentence(check_id, status)
+    assert ":" not in sentence.removeprefix("It doesn't meet this request:")
+    assert "_" not in sentence
+    assert ("couldn't" in sentence) == (status == "unverifiable")
