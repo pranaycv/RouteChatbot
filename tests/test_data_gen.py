@@ -418,3 +418,14 @@ def test_T_8_35_review_label_typos_are_forgiven():
     lab = P.clean_corrected({"route_action": "compare", "clarify_field": "origin", "needs_live_data": "tru",
                              "primary_mode": "bike", "refusal_reason": "none"})
     assert lab["route_action"] == "compare_modes" and lab["clarify_field"] == "none" and lab["needs_live_data"] is True
+
+
+def test_T_8_36_compare_rule():
+    from data_gen import pipeline as P
+    def rec(u): return {"utterance": u, "labels": {"route_action": "compare_modes"}}
+    assert P.compare_rule_applies(rec("whats the fastest way to Rogers Centre?"))
+    assert P.compare_rule_applies(rec("best route to drive to Reid Lodge at 4 PM"))
+    assert not P.compare_rule_applies(rec("is it better to drive during rush hour?"))
+    assert not P.compare_rule_applies(rec("is it faster to drive or walk to Casa Loma?"))
+    assert not P.compare_rule_applies(rec("compare bike routes to the market"))
+    assert not P.compare_rule_applies(rec("walk if under 25 minutes otherwise take the bus"))
