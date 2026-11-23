@@ -61,11 +61,13 @@ def missing_inputs(assumptions: dict) -> list[str]:
 
 def per_request_usage(stage_logs: pd.DataFrame) -> dict:
     """Average per request: model cost (already priced per call in the logs) and API calls by name."""
+    if stage_logs.empty or "request_id" not in stage_logs:   # a run with stubs logs no stage lines
+        return {"requests": 0, "model_cost_per_request": NAN, "api_calls_per_request": {}}
     n = stage_logs["request_id"].nunique()
     model_cost = stage_logs["cost_usd"].sum() / n if n else NAN
     calls = {}
-    for d in stage_logs["api_calls"]:
-        for k, v in (d or {}).items():
+    for d in (stage_logs["api_calls"] if "api_calls" in stage_logs else []):
+        for k, v in (d if isinstance(d, dict) else {}).items():
             calls[k] = calls.get(k, 0) + v
     return {"requests": n, "model_cost_per_request": model_cost,
             "api_calls_per_request": {k: v / n for k, v in calls.items()}}
@@ -91,9 +93,18 @@ def tiered_cost(calls: float, tiers: list) -> float:
     return total
 
 
+def unpriced_api_names(calls_per_request: dict, a: dict) -> list[str]:
+    """Logged API names that have no price line in the assumptions and are not billed elsewhere.
+    The Mapbox cost is NaN while this list is not empty, so a renamed API can never be counted as free."""
+    known = set(a["api_to_price"]) | set(a.get("not_billed_here", ("graphhopper", "openai", "openrouter")))
+    return sorted(k for k in calls_per_request if k not in known)
+
+
 def mapbox_cost(calls_per_request: dict, volume: int, prices, a: dict) -> float:
     """Monthly Mapbox cost at a volume. Calls to the same price line (e.g. both Search Box endpoints)
     are added up first, because Mapbox counts them together against one free tier."""
+    if unpriced_api_names(calls_per_request, a):
+        return NAN   # a logged API with no price line must show up, not count as free
     by_price: dict[str, float] = {}
     for api, per_req in calls_per_request.items():
         line = a["api_to_price"].get(api)
@@ -151,9 +162,23 @@ def monthly_table(usage: dict, success_rate: float, error_rates: dict, prices, a
     return pd.DataFrame(rows)
 
 
-def status_quo_saving(minutes_manual: float, minutes_agent: float, a: dict) -> float:
-    """Value of time saved per trip, compared against cost per request in the decision memo."""
-    return (minutes_manual - minutes_agent) / 60 * _num(a["status_quo"]["value_of_time_usd_per_hour"])
+def status_quo_saving(minutes_manual: float, minutes_agent: float, a: dict) -> dict:
+    """Time saved per trip against planning by hand (map apps, blogs, checking each requirement).
+
+    Agreed at the Nov 12 meeting: the main number is minutes saved, because nobody is paid to plan a
+    trip. A dollar value is added only if the team sets value_of_time_usd_per_hour; otherwise it is NaN."""
+    minutes = minutes_manual - minutes_agent
+    return {"minutes_saved": minutes,
+            "usd_saved": minutes / 60 * _num(a["status_quo"].get("value_of_time_usd_per_hour"))}
+
+
+def status_quo_from_study(study: pd.DataFrame) -> dict:
+    """Summary of report/status_quo_study.csv: median minutes by hand and how often every requirement was met."""
+    done = study[pd.to_numeric(study["minutes_spent"], errors="coerce") > 0]
+    met = done["all_requirements_met"].astype(str).str.lower().eq("yes")
+    return {"trips": len(done),
+            "median_minutes_manual": float(pd.to_numeric(done["minutes_spent"]).median()) if len(done) else NAN,
+            "all_requirements_met_rate": float(met.mean()) if len(done) else NAN}
 
 
 def finetune_breakeven(api_cost_per_class: float, ft_cost_per_class: float, a: dict,
@@ -165,6 +190,19 @@ def finetune_breakeven(api_cost_per_class: float, ft_cost_per_class: float, a: d
     return fixed / saving if saving > 0 else math.inf
 
 
+def measured_rates(request_lines: pd.DataFrame) -> dict:
+    """Rates the cost model can take from the run instead of from assumptions:
+    accept_rate (share of requests accepted) and cards_per_accepted_route (share of accepted routes
+    that showed a sponsor card, at most one each under P-05). Empty when the run has no request lines."""
+    if request_lines.empty or "outcome" not in request_lines:
+        return {}
+    acc = request_lines[request_lines["outcome"] == "accept"]
+    out = {"accept_rate": float(len(acc) / len(request_lines))}
+    if len(acc) and "sponsored_shown" in acc:
+        out["cards_per_accepted_route"] = float(acc["sponsored_shown"].astype(bool).mean())
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--logs", required=True)
@@ -174,8 +212,24 @@ def main():
     a = load_assumptions()
     lines = [json.loads(x) for x in Path(args.logs).read_text().splitlines() if x.strip()]
     stage = pd.DataFrame([x for x in lines if x.get("stage") != "request"])
+    req = pd.DataFrame([x for x in lines if x.get("stage") == "request"])
     sr = pd.read_csv(args.success)["success"].mean() if args.success else NAN
-    table = monthly_table(per_request_usage(stage), sr, {}, load_prices(), a)
+    rates = measured_rates(req)
+    if "cards_per_accepted_route" in rates:
+        # Use what the run actually showed. The 0.6 in the assumptions is only a fallback: in the
+        # synthetic sponsor set each sponsor sits next to one anchor place, so most routes pass none.
+        print(f"cards per accepted route: measured {rates['cards_per_accepted_route']:.2f} "
+              f"(assumption was {a['revenue']['cards_per_accepted_route']})")
+        a["revenue"]["cards_per_accepted_route"] = rates["cards_per_accepted_route"]
+    usage = per_request_usage(stage)
+    if unpriced_api_names(usage["api_calls_per_request"], a):
+        print("WARNING: API names in the log with no price line in eval/cost_assumptions.yaml (Mapbox cost is NaN):",
+              ", ".join(unpriced_api_names(usage["api_calls_per_request"], a)))
+    if not any(usage["api_calls_per_request"].values()):
+        print("WARNING: the log has no map API calls. A replayed run (FIXTURES=replay) makes none, so map cost "
+              "shows as 0; use a live or recorded run for the cost numbers.")
+    table = monthly_table(usage, sr, {k: v for k, v in rates.items() if k == "accept_rate"},
+                          load_prices(), a)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(args.out, index=False)
     print(table.to_string(index=False))
