@@ -1,5 +1,7 @@
 """WP4 provider-response fixtures and routing integration without live credentials."""
 
+from collections import Counter
+
 import httpx
 import pytest
 
@@ -31,10 +33,12 @@ def _feature(name, point, city="Toronto"):
 
 class FixtureMaps:
     def __init__(self):
-        self.calls = []
+        self.calls = Counter()
+        self.requests = []
 
     def request(self, api, method, url, params, body=None):
-        self.calls.append((api, method, url, params, body))
+        self.calls[api] += 1
+        self.requests.append((api, method, url, params, body))
         if api == "graphhopper":
             return {"paths": [PATH]}
         if api == "directions":
@@ -78,16 +82,16 @@ def test_t_4_01_running_example_and_revision(monkeypatch):
     assert candidate.duration_s == 720
     assert candidate.stops_in_order == ["King Station", "On-route store", "U of T"]
 
-    standard_request = next(call[-1] for call in fixtures.calls if call[0] == "graphhopper")
+    standard_request = next(call[-1] for call in fixtures.requests if call[0] == "graphhopper")
     assert "custom_model" not in standard_request
     assert "ch.disable" not in standard_request
 
-    fixtures.calls.clear()
+    fixtures.requests.clear()
     revised = maps.maps_node(state | result | {"revision_count": 1})
     assert revised["candidates"][0].error is None
-    assert [call[0] for call in fixtures.calls] == ["graphhopper", "directions"]
-    assert "custom_model" not in fixtures.calls[0][-1]
-    assert "ch.disable" not in fixtures.calls[0][-1]
+    assert [call[0] for call in fixtures.requests] == ["graphhopper", "directions"]
+    assert "custom_model" not in fixtures.requests[0][-1]
+    assert "ch.disable" not in fixtures.requests[0][-1]
 
 
 def test_t_4_02_picks_smallest_detour():
@@ -158,10 +162,10 @@ def test_city_qualified_station_uses_locality_bias_and_exact_match():
     assert origin.name == "King Station"
     assert (origin.lon, origin.lat) == tuple(POINTS[0])
     assert origin.query == "King Station, Toronto"
-    assert fixtures.calls[0][0] == "geocode"
-    assert fixtures.calls[0][3]["types"] == "place,locality"
-    assert fixtures.calls[1][3]["q"] == "King Station"
-    assert fixtures.calls[1][3]["proximity"] == "-79.4,43.65"
+    assert fixtures.requests[0][0] == "geocode"
+    assert fixtures.requests[0][3]["types"] == "place,locality"
+    assert fixtures.requests[1][3]["q"] == "King Station"
+    assert fixtures.requests[1][3]["proximity"] == "-79.4,43.65"
 
 
 def test_graphhopper_free_plan_rejection_is_distinct_from_no_route(monkeypatch):
