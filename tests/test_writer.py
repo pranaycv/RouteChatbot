@@ -20,15 +20,19 @@ import pytest
 
 from routechat.agents.templates import (
     BOOKING_OR_PAYMENT,
+    CHOOSE_MODE,
     CLARIFY_DESTINATION,
     CLARIFY_ORIGIN,
     CLARIFY_STOPS,
     DATA_REQUEST,
     EMPTY,
+    ERROR_REASONS,
     ESCALATE,
+    HIKE_NOT_SUPPORTED,
     LIVE_PARKING,
-    NO_ROUTE,
+    MODE_NOT_SUPPORTED,
     NOT_ENGLISH,
+    NO_ROUTE,
     OUT_OF_SCOPE_B2B,
     PROMPT_INJECTION,
     SYSTEM_ERROR_TEXT,
@@ -36,12 +40,13 @@ from routechat.agents.templates import (
     TRANSIT_NOT_SUPPORTED,
     UNPARSEABLE,
     UNSAFE_OR_ILLEGAL,
-    ERROR_REASONS,
 )
+from routechat.agents.maps_node import maps_node
 from routechat.agents.writer import build_facts, template_message, write_node, write_reply
 from routechat.config import get_settings
 from routechat.graph import SYSTEM_ERROR_TEXT as GRAPH_SYSTEM_ERROR_TEXT
 from routechat.guards.input_guard import guard_text
+from routechat.guards.output_guard import output_guard
 from routechat.schemas import (
     ClarifyField,
     GuardReason,
@@ -52,6 +57,7 @@ from routechat.schemas import (
     SponsoredSuggestion,
 )
 from routechat.stubs import running_candidate, running_constraints, running_places, running_report
+from routechat.verify.decide import verify_node
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLIES = ROOT / "tests" / "fixtures" / "writer_replies.json"
@@ -253,8 +259,43 @@ def test_t_6_01_error_codes_have_templates(reason: str):
     elif reason == "transit_not_supported":
         assert message == TRANSIT_NOT_SUPPORTED
         assert "running" in message
+    elif reason == "mode_not_supported":
+        assert message == MODE_NOT_SUPPORTED
     else:
         assert message == SYSTEM_ERROR_TEXT
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [("hike", HIKE_NOT_SUPPORTED), ("unspecified", CHOOSE_MODE), ("multimodal", MODE_NOT_SUPPORTED)],
+)
+def test_a_mode_the_map_tools_turn_away_gets_its_own_reply(mode: str, expected: str):
+    """WP4, WP5 and WP7 as they run in the graph. The map tools stop before any request."""
+    state = _planned(
+        request_id="r_test",
+        constraints=running_constraints().model_copy(update={"mode": mode}),
+        classification=_classify("plan", primary_mode=mode),
+    )
+    state |= maps_node(state)
+    state |= verify_node(state)
+    draft = write_reply(state, llm=_Boom())
+    assert draft.message == expected
+    assert draft.kind == "template"
+    final = output_guard(state | {"draft": draft})["final"]
+    assert final.text == expected
+
+
+def test_a_compared_hike_gets_the_hike_reply():
+    state = _planned(
+        request_id="r_test",
+        constraints=running_constraints().model_copy(
+            update={"mode": "walk", "modes_to_compare": ["walk", "hike"]}
+        ),
+        classification=_classify("compare_modes", primary_mode="walk"),
+    )
+    state |= maps_node(state)
+    state |= verify_node(state)
+    assert write_reply(state, llm=_Boom()).message == HIKE_NOT_SUPPORTED
 
 
 def test_t_6_01_extraction_gaps_and_escalate_use_templates():
@@ -296,6 +337,9 @@ def test_t_6_01_templates_do_not_make_a_promise():
         LIVE_PARKING,
         UNSAFE_OR_ILLEGAL,
         TRANSIT_NOT_SUPPORTED,
+        HIKE_NOT_SUPPORTED,
+        CHOOSE_MODE,
+        MODE_NOT_SUPPORTED,
         SYSTEM_ERROR_TEXT,
         NO_ROUTE,
     ]

@@ -24,6 +24,7 @@ from routechat.agents.templates import (
     GUARD_TEMPLATES,
     REFUSAL_TEMPLATES,
     UNPARSEABLE,
+    mode_not_supported_text,
     place_not_found_text,
     too_many_stops_text,
 )
@@ -104,6 +105,15 @@ def _error_reason(state: dict[str, Any]) -> str | None:
     return None
 
 
+def _unsupported_mode(state: dict[str, Any]) -> str | None:
+    """The mode the map tools turned away. The trip's own mode if no route says."""
+    for candidate in state.get("candidates") or []:
+        if _field(candidate, "error") == "mode_not_supported":
+            return _field(candidate, "mode")
+    constraints = state.get("constraints")
+    return _field(constraints, "mode") if constraints is not None else None
+
+
 def _missing_query(state: dict[str, Any]) -> str:
     """First place the user named that the map tools did not resolve."""
     constraints = state.get("constraints")
@@ -165,6 +175,8 @@ def template_message(state: dict[str, Any]) -> str | None:
     reason = _error_reason(state)
     if reason == "place_not_found":
         return place_not_found_text(_missing_query(state))
+    if reason == "mode_not_supported":
+        return mode_not_supported_text(_unsupported_mode(state))
     if reason is not None:
         return ERROR_TEMPLATES[reason]
 
