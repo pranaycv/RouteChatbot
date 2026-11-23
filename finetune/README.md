@@ -19,8 +19,8 @@ Two ways to run `kaggle_train.ipynb` on a free Kaggle T4. Both read D1 from the 
 ```bash
 cd finetune
 kaggle kernels push -p .            # uploads and starts the notebook on a T4
-kaggle kernels status <username>/routechatbot-wp9-finetune
-kaggle kernels output <username>/routechatbot-wp9-finetune -p artifacts/kaggle_output   # when complete
+kaggle kernels status <username>/routechatbot-wp9-fine-tune
+kaggle kernels output <username>/routechatbot-wp9-fine-tune -p artifacts/kaggle_output   # when complete
 ```
 
 The adapter zip lands in `artifacts/kaggle_output/`. Unzip it to `finetune/artifacts/adapter/` (git-ignored) or set `CLASSIFIER_ADAPTER_DIR`, and `CLASSIFIER_BACKEND=ft` works.

@@ -1,6 +1,6 @@
 {
-  "id": "KAGGLE_USERNAME/routechatbot-wp9-finetune",
-  "title": "RouteChatbot WP9 fine-tune",
+  "id": "KAGGLE_USERNAME/routechatbot-wp9-fine-tune",
+  "title": "routechatbot-wp9-fine-tune",
   "code_file": "kaggle_train.ipynb",
   "language": "python",
   "kernel_type": "notebook",
