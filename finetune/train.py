@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -76,6 +77,8 @@ def train(args: argparse.Namespace) -> dict:
         print(json.dumps(summary, indent=2))
         return summary
 
+    # One GPU per process. Kaggle sometimes attaches two T4s, and SFTTrainer refuses nn.DataParallel.
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
     import torch
     from datasets import load_dataset
     from peft import LoraConfig
