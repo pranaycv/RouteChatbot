@@ -1,0 +1,34 @@
+# Owner: Person A (WP1 input guard), Team Rosedale, MMAI 894.
+# Attack patterns for the input guard. WP11 may extend these without a code change.
+# Reviewed against operating policy P-07 (never reveal instructions or other users' data).
+#
+# Groups map to GuardReason values. First matching group wins (prompt_injection
+# before data_request). Patterns are case-insensitive and must require an
+# instruction/rule word for injection so "ignore the traffic" stays allowed.
+
+prompt_injection:
+  # "ignore … previous/prior … instructions/rules"
+  - "ignore\\s+(?:all\\s+)?(?:your\\s+|the\\s+)?(?:previous|prior|above)\\s+(?:instructions?|rules?|prompts?)"
+  - "disregard\\s+(?:all\\s+)?(?:your\\s+|the\\s+)?(?:previous|prior|above)\\s+(?:instructions?|rules?|prompts?)"
+  - "forget\\s+(?:all\\s+)?(?:your\\s+|the\\s+)?(?:previous|prior|above)\\s+(?:instructions?|rules?|prompts?)"
+  # system / developer prompt leaks and role overrides
+  - "system\\s+prompt"
+  - "developer\\s+mode"
+  - "you\\s+are\\s+now"
+  - "jailbreak"
+  - "reveal\\s+(?:your\\s+)?(?:system\\s+)?(?:instructions?|prompt|rules?)"
+  - "print\\s+(?:your\\s+)?(?:system\\s+)?(?:instructions?|prompt|rules?)"
+  - "show\\s+(?:me\\s+)?(?:your\\s+)?(?:system\\s+)?(?:instructions?|prompt|rules?)"
+
+data_request:
+  # other users' trips, addresses, or history (P-07)
+  - "other\\s+users?"
+  - "another\\s+user(?:'s|s)?"
+  - "last\\s+user(?:'s|s)?"
+  - "previous\\s+user(?:'s|s)?"
+  - "someone\\s+else(?:'s)?\\s+address"
+  - "search\\s+history"
+  - "other\\s+people(?:'s)?\\s+(?:address|trip|route|search)"
+  - "someone\\s+else(?:'s)?\\s+(?:trip|route|search|data)"
+  - "print\\s+the\\s+last\\s+user"
+  - "show\\s+(?:me\\s+)?(?:the\\s+)?(?:last|previous)\\s+user"

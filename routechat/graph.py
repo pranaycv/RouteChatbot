@@ -62,7 +62,14 @@ NodeFn = Callable[..., dict]
 
 
 class TripState(TypedDict, total=False):
-    """One request. Each field has one writer, named in the comment."""
+    """Shared state for one request.
+
+    total=False because each stage returns only the fields it owns, and
+    LangGraph merges that partial dict into what is already there. The
+    comment on each field names its only writer. A new request must not
+    carry `final` over from the previous turn: a set `final` is how the
+    routers know a stage has already stopped the run.
+    """
 
     request_id: str
     utterance: str
@@ -83,17 +90,28 @@ class TripState(TypedDict, total=False):
 
 
 def _field(value: Any, name: str) -> Any:
+    """Read one contract field from a Pydantic model or a plain dict.
+
+    Stages should return models. A dict is accepted so a package can land
+    before every return value has been switched over, and the routers still
+    agree on the field name.
+    """
     if isinstance(value, dict):
         return value[name]
     return getattr(value, name)
 
 
 def _finished(state: TripState) -> bool:
-    """The error wrapper already produced the reply, so the graph must stop."""
+    """True once the error wrapper has written the reply the user will see.
+
+    Routers check this before they read stage output. A crash does not fill
+    `guard` or `report`, and the next edge would raise if it assumed they exist.
+    """
     return state.get("final") is not None
 
 
 def after_guard(state: TripState) -> str:
+    """allow continues. clarify, refuse, and fixed_reply skip straight to the writer."""
     if _finished(state):
         return END
     decision = _field(state["guard"], "decision")
@@ -105,6 +123,12 @@ def after_guard(state: TripState) -> str:
 
 
 def after_classify(state: TripState) -> str:
+    """plan, replan, compare_modes, and lookup_only go to the extractor.
+
+    clarify, escalate, and refuse go to the writer. A clarify that is still
+    unresolved after one follow-up also goes to the writer; the write wrapper
+    relabels that case as escalate before the writer runs.
+    """
     if _finished(state):
         return END
     action = _field(state["classification"], "route_action")
@@ -118,6 +142,7 @@ def after_classify(state: TripState) -> str:
 
 
 def after_extract(state: TripState) -> str:
+    """A complete trip goes to the map tools. A missing field or too many stops goes to the writer."""
     if _finished(state):
         return END
     constraints = state["constraints"]
@@ -127,13 +152,24 @@ def after_extract(state: TripState) -> str:
 
 
 def after_maps(state: TripState) -> str:
+    """Map tools continue to the verifier, unless that stage was aborted.
+
+    The handbook draws maps to verify as a fixed edge. It is conditional
+    only so a timeout or a crash can stop the graph instead of calling the
+    verifier with no route.
+    """
     if _finished(state):
         return END
     return "verify"
 
 
 def after_verify(state: TripState) -> str:
-    """A revise returns to maps once. A second revise does not loop."""
+    """accept and handoff go to the writer. The first revise goes back to maps.
+
+    revision_count == 1 means the verifier is asking for that one loop. A
+    second revise leaves the count at 2 or more and falls through to the
+    writer, so a verifier bug cannot loop forever.
+    """
     if _finished(state):
         return END
     decision = _field(state["report"], "decision")
@@ -143,13 +179,20 @@ def after_verify(state: TripState) -> str:
 
 
 def after_write(state: TripState) -> str:
+    """The writer continues to the output guard, unless the writer itself failed."""
     if _finished(state):
         return END
     return "guard_out"
 
 
 def _escalate_stale_clarify(state: TripState) -> tuple[TripState, dict]:
-    """Still unclear after one follow-up is written as escalate."""
+    """Turn a second clarify into escalate before the writer sees the state.
+
+    The app keeps clarify_count between turns. The routing table calls this
+    case "write, as escalate". The writer only picks a template from
+    route_action, so the label change lives here, in the graph, rather than
+    inside the writer's package.
+    """
     classification = state.get("classification")
     if classification is None:
         return state, {}
@@ -167,6 +210,13 @@ def _escalate_stale_clarify(state: TripState) -> tuple[TripState, dict]:
 
 
 def _cap_revision(state: TripState, update: dict) -> dict:
+    """Allow one revise, even when the verifier asks for a second.
+
+    The first revise sets revision_count to 1, and after_verify sends the
+    request back to the map tools. If verify returns revise again, the count
+    becomes 2 and the next edge goes to the writer. The verifier is supposed
+    to return handoff on that second pass. This limit still holds when it does not.
+    """
     report = update.get("report")
     if report is None or _field(report, "decision") != "revise":
         return update
@@ -177,7 +227,12 @@ def _cap_revision(state: TripState, update: dict) -> dict:
 
 
 def _log_failure(request_id: str, stage: str, decision: str, error_type: str | None, latency_ms: float) -> None:
-    # Exception type only. The message and the user text stay out of the log.
+    """Write one JSON log line with the exception type and not its message.
+
+    The message and the traceback can contain the user's text. WP7 owns the
+    full per-stage logger; this line exists so a crash is still recorded
+    before that package is merged.
+    """
     logger.error(
         json.dumps(
             {
@@ -196,6 +251,14 @@ def _log_failure(request_id: str, stage: str, decision: str, error_type: str | N
 
 
 def _abort(state: TripState, stage: str, reason: str, error_type: str | None, latency_ms: float) -> dict:
+    """Stop the request with the system-error template and an empty redacted request.
+
+    The raw utterance stays out of the ticket because this path can run
+    before the input guard has masked it. `final` is the signal the routers
+    use to stop. A normal state update is used, rather than a LangGraph
+    Command, because a Command does not cancel the edges already drawn on
+    these nodes.
+    """
     _log_failure(str(state.get("request_id", "unknown")), stage, reason, error_type, latency_ms)
     ticket = HandoffTicket(
         ticket_id=f"t_{uuid4().hex[:12]}",
@@ -212,11 +275,17 @@ def _abort(state: TripState, stage: str, reason: str, error_type: str | None, la
         stops=[],
         used_fallback_template=True,
     )
-    # `final` tells every router to stop. The static edges would otherwise continue.
     return {"handoff": ticket, "final": final}
 
 
 def _call_node(stage: str, fn: NodeFn, state: TripState) -> dict:
+    """Run one stage, then apply the two rules that belong to the graph.
+
+    deadline is a time.monotonic() timestamp. The first stage fills it in
+    when the caller did not. A stage that raises, returns a non-dict, or
+    starts after the deadline becomes a handoff instead of a crash. The
+    exception object itself is not logged.
+    """
     started = time.perf_counter()
     deadline = state.get("deadline")
     prefix: dict = {}
@@ -263,6 +332,11 @@ def _load(module_name: str, names: tuple[str, ...]) -> Callable:
 
 
 def _classify_adapter(state: TripState) -> dict:
+    """Adapt WP2's classify(turn) when predict.py does not export classify_node.
+
+    The utterance is the guard's clean_text, so the classifier does not see
+    personal data the input guard has already masked.
+    """
     classify = _load("routechat.classifier.predict", ("classify",))
     guard = state.get("guard")
     utterance = _field(guard, "clean_text") if guard is not None else state["utterance"]
@@ -271,6 +345,12 @@ def _classify_adapter(state: TripState) -> dict:
 
 
 def _import_stage_nodes() -> dict[str, NodeFn]:
+    """Import each stage from the module its owner ships.
+
+    classify_node is preferred over classify when both exist, so WP2 can own
+    its node wrapper without this file also calling classify. A missing
+    module raises ImportError. This function does not create those files.
+    """
     classify_module = importlib.import_module("routechat.classifier.predict")
     classify_node = getattr(classify_module, "classify_node", None)
     classify: NodeFn = classify_node if callable(classify_node) else _classify_adapter
@@ -295,7 +375,11 @@ def resolve_nodes() -> dict[str, NodeFn]:
 
 
 def build_graph(nodes: Mapping[str, NodeFn] | None = None):
-    """Compile the seven-stage graph. Pass nodes to inject fakes in tests."""
+    """Compile the seven-stage graph.
+
+    Pass nodes to inject fakes in tests. Production code omits that argument
+    and gets resolve_nodes(), which is the stubs or the real stage packages.
+    """
     resolved = dict(resolve_nodes() if nodes is None else nodes)
     missing = [name for name in NODE_ORDER if name not in resolved]
     if missing:
@@ -313,7 +397,7 @@ def build_graph(nodes: Mapping[str, NodeFn] | None = None):
         "classify", after_classify, {"extract": "extract", "write": "write", **stop}
     )
     graph.add_conditional_edges("extract", after_extract, {"maps": "maps", "write": "write", **stop})
-    # Success path is maps -> verify. A timeout or crash on maps stops instead.
+    # Handbook edge is maps -> verify. Conditional so an abort can end the run.
     graph.add_conditional_edges("maps", after_maps, {"verify": "verify", **stop})
     graph.add_conditional_edges("verify", after_verify, {"maps": "maps", "write": "write", **stop})
     graph.add_conditional_edges("write", after_write, {"guard_out": "guard_out", **stop})

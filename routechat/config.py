@@ -1,4 +1,9 @@
-"""Typed view of config.yaml. Thresholds, model names, and prices live there."""
+"""Typed view of config.yaml.
+
+Stage code reads thresholds, model names, and prices from here instead of
+hard-coding them. An unknown key is an error, so adding a setting is a
+change to this package, which owns the key list.
+"""
 
 from functools import lru_cache
 from pathlib import Path
@@ -12,14 +17,20 @@ CONFIG_PATH = ROOT / "config.yaml"
 
 
 class _Strict(BaseModel):
+    """Reject unknown keys and freeze the values after load."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class GraphSettings(_Strict):
+    """Read by the orchestrator. request_budget_s is the per-request deadline."""
+
     request_budget_s: float
 
 
 class GuardSettings(_Strict):
+    """WP1 length and language limits."""
+
     max_chars: int
     short_text_chars: int
     english_min_prob: float
@@ -27,6 +38,8 @@ class GuardSettings(_Strict):
 
 
 class ClassifierSettings(_Strict):
+    """WP2 model names. The backend itself is chosen by CLASSIFIER_BACKEND."""
+
     base_model: str
     fallback_model: str
     prompted_small: str
@@ -36,24 +49,25 @@ class ClassifierSettings(_Strict):
 
 
 class ExtractorSettings(_Strict):
+    """WP3 model. Stop and compare limits live under TripSettings, shared with the map tools."""
+
     model: str
     temperature: float
 
 
 class WriterSettings(_Strict):
+    """WP6 model and the 90-word cap."""
+
     model: str
     temperature: float
     max_words: int
 
 
 class TripSettings(_Strict):
+    """Limits shared by the extractor and the map tools, so the two packages cannot drift."""
+
     max_required_stops: int
     max_modes_to_compare: int
-
-
-class LonLat(_Strict):
-    lon: float
-    lat: float
 
 
 class HighwayWeights(_Strict):
@@ -87,18 +101,20 @@ class CustomModelWeights(_Strict):
 
 
 class MapSettings(_Strict):
+    """WP4 timeouts, the optional country filter, detour limits, and custom-model weights."""
+
     http_timeout_s: float
     attempts: int
     wait_s: float
-    geocode_country: str
-    downtown_toronto: LonLat
-    origin_match_radius_km: float
+    geocode_country: str | None = None
     detour_min_km: float
     detour_fraction: float
     custom_model: CustomModelWeights
 
 
 class VerifierSettings(_Strict):
+    """WP5 check thresholds. bike_network_min_share is the 0.60 bike-lane rule."""
+
     bike_network_min_share: float
     highway_max_m: float
     flat_max_climb_m_per_km: float
@@ -131,6 +147,8 @@ class GraphHopperPrice(_Strict):
 
 
 class Prices(_Strict):
+    """WP11 cost-model inputs, recorded from public pricing on 2026-11-11."""
+
     openai_usd_per_million_tokens: dict[str, TokenPrice]
     mapbox_usd_per_thousand: dict[str, TierPrice]
     graphhopper: GraphHopperPrice
@@ -150,7 +168,11 @@ class Settings(_Strict):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Load .env and config.yaml once per process."""
+    """Load .env and config.yaml once per process.
+
+    Later calls return the cached object. Tests that need a fresh read
+    should call get_settings.cache_clear() first.
+    """
     load_dotenv()
     raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     return Settings.model_validate(raw)

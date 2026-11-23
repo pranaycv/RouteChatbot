@@ -19,6 +19,10 @@ RouteAction = Literal[
     "escalate",
     "refuse",
 ]
+# Accepted modes are walk, run, bike, and car. A run is routed like a walk.
+# A combination of those four is also accepted. hike and transit stay in the
+# list so they can be named and turned away. multimodal is accepted only when
+# every part is one of the four allowed modes.
 PrimaryMode = Literal[
     "walk",
     "bike",
@@ -169,7 +173,10 @@ class ResolvedPlace(_Contract):
     lon: float
     lat: float
     source: str = Field(description="Resolver that produced the point, such as searchbox or geocode.")
-    opening_hours: str | None = None
+    opening_hours: str | None = Field(
+        default=None,
+        description="Hours as text, or null when the provider did not return them. Null is unknown, not closed.",
+    )
     detour_km: float | None = None
 
 
@@ -188,7 +195,10 @@ class RouteCandidate(_Contract):
     toll_m: float | None = None
     ferry_m: float | None = None
     bike_network_share: float | None = None
-    closures: list[dict[str, object]] | None = None
+    closures: list[dict[str, object]] | None = Field(
+        default=None,
+        description="Null means the provider gave no closure information, so the fact is unknown. An empty list means it checked and found none. WP4 must not replace null with an empty list.",
+    )
     geometry: LineString | None = None
     error: str | None = None
 
