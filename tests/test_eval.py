@@ -280,3 +280,22 @@ def test_T_10_17_classifier_metrics_when_calls_fail():
     m = metrics.classifier_metrics(pred, gold)
     assert m["joint_exact_match"] == 0.0 and m["json_failure_rate"] == 1.0
     assert m["policy_critical_error_rate"] == 0.5          # the refuse was missed; the plan was not refused
+
+
+def test_T_10_18_p09_after_pr18_and_reused_run_id(tmp_path):
+    # PR #18: hike and combined modes are refused by the verifier, a missing mode becomes clarify, no ticket.
+    st = {"guard": {"decision": "allow"}, "classification": {"route_action": "plan"},
+          "report": {"decision": "refuse", "handoff_reason": "mode_not_supported"}}
+    assert outcome_from_state(st) == "refuse"
+    assert outcome_from_state({**st, "report": {"decision": "clarify"}}) == "clarify"
+    gold = pd.DataFrame({"item_id": ["h", "m", "c"], "expected_outcome": ["accept", "accept", "accept"],
+                         "gold_constraints": [{"mode": "hike"}, {"mode": "multimodal"}, {"mode": "car"}]})
+    logs = pd.DataFrame({"item_id": ["h", "m", "c"], "outcome": ["refuse", "refuse", "refuse"],
+                         "checks": [[], [], []], "handoff_reason": ["mode_not_supported"] * 3})
+    ts = metrics.trip_success(logs, gold).set_index("item_id")
+    assert ts.loc["h", "success"] and ts.loc["m", "success"] and not ts.loc["c", "success"]
+    # a reused RUN_ID must not add a second run to the same log file
+    from eval.run_eval import fresh_log
+    p = tmp_path / "logs" / "r.jsonl"
+    p.parent.mkdir(); p.write_text('{"stage": "classify", "cost_usd": 1}\n')
+    assert fresh_log(p) == p and not p.exists() and len(list(p.parent.glob("r.*.old.jsonl"))) == 1

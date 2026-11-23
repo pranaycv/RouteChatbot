@@ -48,10 +48,12 @@ bash eval/final_run.sh                             # the final run, once every s
 - **A reply the judge didn't grade is not clean.** It counts against trip success, so a judge failure can't make results look better.
 - **One grader is enough to run the judge check.** With a second grader we also report person vs
   person; with one, that column is NaN and the report says the judge was checked against one person.
-- **Hike and transit follow P-09.** Transit is refused by the classifier (`out_of_scope_mode`, in the
-  schema since Nov 23), so D1 and D2 score it as a refuse. When the gold mode is hike and the map tools
-  stop it with "not covered yet", the outcome counts as right. The results keep a `not_covered_p09` column so these
-  are reported on their own.
+- **Hike, transit and combined modes follow P-09.** Transit is refused by the classifier
+  (`out_of_scope_mode`). Hike and combined modes are refused by the verifier without a ticket, and a
+  missing mode becomes clarify (PR #18). When the gold mode is hike, transit or multimodal and the system
+  says it is not covered yet, the outcome counts as right; `not_covered_p09` keeps these visible.
+- **A new RUN_ID for every run.** WP7's logger appends, so if a log file for that RUN_ID already exists
+  `run_eval` moves it aside first; otherwise its cost would be counted twice.
 - **Only inspected routes use a person's answer.** Trip success uses the reviewer's answer for the 50
   inspected routes; other accepted routes keep the verifier's statuses and are marked `verifier_only`.
 - **An API with no price is never free.** If the log has an API name that `cost_assumptions.yaml` does
