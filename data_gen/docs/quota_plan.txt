@@ -1,0 +1,26 @@
+IPF max marginal error: 4.23e-08  (all quotas reachable)
+  key   plan                               target 0.300  achieved 0.300
+  key   clarify                            target 0.150  achieved 0.150
+  key   replan                             target 0.100  achieved 0.100
+  key   compare_modes                      target 0.100  achieved 0.100
+  key   lookup_only                        target 0.100  achieved 0.100
+  key   escalate                           target 0.100  achieved 0.100
+  key   refuse/out_of_scope_b2b            target 0.030  achieved 0.030
+  key   refuse/out_of_scope_mode           target 0.030  achieved 0.030
+  key   refuse/live_parking_or_inventory   target 0.020  achieved 0.020
+  key   refuse/booking_or_payment          target 0.020  achieved 0.020
+  key   refuse/prompt_injection            target 0.020  achieved 0.020
+  key   refuse/data_request                target 0.020  achieved 0.020
+  key   refuse/unsafe_or_illegal           target 0.010  achieved 0.010
+  diff  easy                               target 0.500  achieved 0.500
+  diff  hard                               target 0.300  achieved 0.300
+  diff  adversarial                        target 0.200  achieved 0.200
+  mode  walk                               target 0.190  achieved 0.190
+  mode  bike                               target 0.220  achieved 0.220
+  mode  hike                               target 0.130  achieved 0.130
+  mode  run                                target 0.090  achieved 0.090
+  mode  car                                target 0.220  achieved 0.220
+  mode  unspecified                        target 0.150  achieved 0.150
+  turn  0                                  target 0.850  achieved 0.850
+  turn  1                                  target 0.150  achieved 0.150
+realised use-case share: {0: 0.05, 1: 0.111, 2: 0.06, 3: 0.0472, 4: 0.0944, 5: 0.0333, 6: 0.0359, 7: 0.1287, 8: 0.0113, 9: 0.0089, 10: 0.015, 11: 0.0165, 12: 0.0045, 13: 0.0313, 14: 0.0094, 15: 0.0178, 16: 0.0417, 17: 0.0148, 18: 0.015, 19: 0.0762, 20: 0.0094, 21: 0.0479, 22: 0.0204, 23: 0.0218, 24: 0.0145, 25: 0.0145, 26: 0.0051, 27: 0.0145, 28: 0.0145, 29: 0.0145}
