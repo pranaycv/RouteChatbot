@@ -49,6 +49,8 @@ def run(backend_name: str, rows: list[dict]) -> list[dict]:
     out = []
     for subset, pairs in list(per.items()) + [("all", per["hw"] + per["generated"])]:
         n = len(pairs)
+        if n == 0:  # validation has no hand-written records
+            continue
         row = {"backend": backend_name, "prompt_version": getattr(backend, "prompt_version", None) or predict.prompt_version(), "subset": subset, "n": n,
                "joint_exact_match": sum(all(p[f] == r[f] for f in FIELDS) for r, p in pairs) / n,
                "policy_critical_error_rate": sum(policy_critical(r["route_action"], p["route_action"]) for r, p in pairs) / n,
