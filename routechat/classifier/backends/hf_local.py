@@ -77,7 +77,9 @@ def load_model(model_id: str, adapter_dir: str | None):
 
     from peft import PeftModel
 
-    name = Path(adapter_dir).resolve().as_posix().replace("/", "_").replace(":", "")
+    # PEFT uses the adapter name as a module name, which may not contain a dot (a run dir such as
+    # run_r16_lr0.0002 would otherwise fail on Kaggle).
+    name = Path(adapter_dir).resolve().as_posix().replace("/", "_").replace(":", "").replace(".", "_")
     peft = _PEFT.get(model_id)
     if peft is None:
         peft = PeftModel.from_pretrained(base, adapter_dir, adapter_name=name)
