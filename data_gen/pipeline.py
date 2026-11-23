@@ -45,8 +45,8 @@ try:
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore
 
-PROMPT_VERSION = "gen_v1"
-RELABEL_PROMPT_VERSION = "relabel_v1"
+PROMPT_VERSION = "gen_v2"
+RELABEL_PROMPT_VERSION = "relabel_v2"
 DEFAULT_OUT = "data/d1"
 DEFAULT_CACHE = "data_gen/cache/synth_llm"    # git-ignored by the repo .gitignore
 
@@ -128,7 +128,7 @@ def load_prompt(name: str) -> Tuple[str, str]:
 
 
 def label_guide() -> str:
-    lines = (spec.HERE / "prompts" / "label_guide_draft.md").read_text(encoding="utf-8").splitlines()
+    lines = (spec.HERE / "prompts" / "label_guide_v1.md").read_text(encoding="utf-8").splitlines()
     return "\n".join(lines[1:]).strip()
 
 
@@ -270,6 +270,15 @@ def extract_json(text: Optional[str]) -> Tuple[Optional[dict], Optional[str]]:
     except Exception:
         pass
     a, b = s.find("{"), s.rfind("}")
+    if a != -1:
+        # Take the FIRST valid JSON object and ignore trailing junk
+        # (some models repeat fragments after the closing brace).
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(s[a:])
+            if isinstance(obj, dict):
+                return obj, None
+        except Exception:
+            pass
     if a != -1 and b > a:
         try:
             return json.loads(s[a:b + 1]), None
@@ -356,6 +365,22 @@ def _mode_rule(job: dict) -> str:
     return hint + "."
 
 
+def _omit_rule(job: dict) -> str:
+    """Clarify rows must really be missing something; the pilot showed generators often named it anyway."""
+    L = job["labels"]
+    if L["route_action"] != "clarify" or job["turn"] != 0:
+        return "Mention every fact the labels need; do not leave out a place the request depends on."
+    f = L["clarify_field"]
+    if f == "origin":
+        return ("The message must NOT say where the person is starting from (no start place, no 'from my hotel', "
+                "no 'from here'). Name only the destination or the goal.")
+    if f == "destination":
+        return ("The message must NOT name where the person is going. Give the starting point and what they want "
+                "(distance, mode, preferences) but no destination.")
+    return ("The person wants to stop somewhere along the way but must NOT name or describe that stop. "
+            "Name the start and the destination only.")
+
+
 def _turn_block(job: dict) -> str:
     if job["turn"] == 0:
         return "This is the FIRST message of the conversation."
@@ -371,7 +396,7 @@ def _turn_block(job: dict) -> str:
 def build_messages(job: dict) -> List[dict]:
     system, user = load_prompt(PROMPT_VERSION)
     user = (user.replace("<<LABELS>>", fmt_labels(job["labels"]))
-            .replace("<<LABEL_GUIDE>>", label_guide())
+            .replace("<<LABEL_GUIDE>>", label_guide()).replace("<<OMIT_RULE>>", _omit_rule(job))
             .replace("<<USE_CASE>>", f"{job['use_case']}. {job['use_case_desc']}")
             .replace("<<PERSONA>>", spec.load_personas()[job["persona"]])
             .replace("<<DIFFICULTY>>", job["difficulty"])
@@ -448,14 +473,25 @@ def generate_record(job: dict, client: LLMClient) -> dict:
     if client.offline:
         raw = mock_message(job, random.Random(job["seed"]))
     else:
-        res = client.chat(job["model"], build_messages(job), job["temperature"], job["top_p"], job["seed"])
-        rec["latency_s"], rec["cost_usd"] = res["latency_s"], res["cost_usd"]
-        if res["error"]:
-            rec.update({"parse_error": res["error"], "raw_message": None, "utterance": None})
-            return rec
-        obj, err = extract_json(res["text"])
-        if err or "message" not in obj:
-            rec.update({"parse_error": err or "missing 'message'", "raw_message": res["text"], "utterance": None})
+        # The pilot lost 9% of records to parse errors, so a failed call is retried once with the next model.
+        # The record keeps the model that actually produced the text.
+        models = list(spec.GENERATOR_MODELS)
+        start = models.index(job["model"]) if job["model"] in models else 0
+        for attempt in range(2):
+            model = models[(start + attempt) % len(models)]
+            res = client.chat(model, build_messages(job), job["temperature"], job["top_p"], job["seed"] + attempt)
+            rec["latency_s"] += res["latency_s"]
+            rec["cost_usd"] += res["cost_usd"]
+            if res["error"]:
+                rec.update({"parse_error": res["error"], "raw_message": None, "utterance": None})
+                continue
+            obj, err = extract_json(res["text"])
+            if err or "message" not in obj:
+                rec.update({"parse_error": err or "missing 'message'", "raw_message": res["text"], "utterance": None})
+                continue
+            rec.update(model=model, parse_error=None, retried=bool(attempt))
+            break
+        else:
             return rec
         raw = str(obj["message"] or "")
     rec["raw_message"] = raw
@@ -517,6 +553,13 @@ def qc(rec: dict) -> List[str]:
                        or rec["labels"]["refusal_reason"] == "out_of_scope_mode")
     if TRANSIT_RE.search(raw) and not allowed_transit:
         reasons.append("unexpected_transit_mention")
+    L = rec["labels"]
+    if L["route_action"] == "clarify" and rec.get("turn") == 0 and L["clarify_field"] in ("origin", "destination"):
+        placed = {v for k, v in (rec.get("slots") or {}).items()
+                  if k in ("landmark", "landmark_2", "station", "park", "trailhead", "hotel_name", "home_address")
+                  and v and v.lower() in low}
+        if len(placed) >= 2:                     # both ends are named, so nothing is missing
+            reasons.append("omitted_field_present")
     if n_words >= 6 and rec.get("generator") == "llm" and _lang_problem(msg):
         reasons.append("wrong_language")
     return reasons

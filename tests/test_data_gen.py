@@ -353,3 +353,31 @@ def test_T_8_28_sponsor_names_are_city_flavoured_and_ratings_clustered(ds):
     assert 3 <= sum(v < 4.0 for v in r) <= 8                                # a few below the 4.0 floor
     assert sum(4.0 <= v <= 4.6 for v in r) >= int(0.6 * len(r))             # most clustered mid-high
     assert 3 <= sum(v >= 4.7 for v in r) <= 8
+
+
+def test_T_8_29_clarify_row_naming_both_ends_is_rejected():
+    job = next(j for j in sampling.build_jobs(400, seed=3)
+               if j["labels"]["route_action"] == "clarify" and j["turn"] == 0 and j["labels"]["clarify_field"] == "destination")
+    rec = P.generate_record(job, P.LLMClient(api_key=None, cache_dir="", offline=True))
+    slots = rec["slots"]
+    rec["utterance"] = f"route from {slots['landmark']} to {slots['landmark_2']} by bike please"
+    rec["raw_message"] = rec["utterance"]
+    assert "omitted_field_present" in P.qc(rec)
+    rec["utterance"] = f"route from {slots['landmark']} by bike please"
+    assert "omitted_field_present" not in P.qc(rec)
+
+
+def test_T_8_30_omit_rule_and_prompt_versions():
+    jobs = sampling.build_jobs(400, seed=4)
+    cl = next(j for j in jobs if j["labels"]["route_action"] == "clarify" and j["turn"] == 0 and j["labels"]["clarify_field"] == "origin")
+    assert "must NOT say where" in P._omit_rule(cl)
+    pl = next(j for j in jobs if j["labels"]["route_action"] == "plan")
+    assert "must NOT" not in P._omit_rule(pl)
+    assert P.PROMPT_VERSION == "gen_v2" and P.RELABEL_PROMPT_VERSION == "relabel_v2"
+    assert "multimodal" in P.load_prompt(P.RELABEL_PROMPT_VERSION)[1]
+
+
+def test_T_8_31_extract_json_ignores_trailing_garbage():
+    from data_gen import pipeline
+    obj, err = pipeline.extract_json('{"message": "hi"}\nOUS."}\nOUS."}')
+    assert err is None and obj["message"] == "hi"
