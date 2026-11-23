@@ -10,8 +10,7 @@
     "mode": "llm",
     "n": 120,
     "rejected_by_reason": {
-      "gold_place_missing": 2,
-      "parse_error:HTTP 429": 1
+      "gold_place_missing": 2
     }
   },
   "d3": {
@@ -57,7 +56,7 @@
   "seed": 42,
   "sha256": {
     "data/sponsors.json": "f995d949502b0348f253bd2f91be05b59a86b6dadb8208ede57d74837db54b66",
-    "eval/datasets/d2_end_to_end.jsonl": "20292bc54c59a34863356b4b548f4c5eb5012d4a37087e6668c411c87b5543d0",
+    "eval/datasets/d2_end_to_end.jsonl": "14dd822f00098aee2195e9ab0877027492ee02deca93069b426106cbf1c1fbe2",
     "eval/datasets/d3_adversarial.jsonl": "100e1feb120331e01b1b7ad9d62ebcce264dccd8937fa998dd8447d46de3b4ef"
   }
 }

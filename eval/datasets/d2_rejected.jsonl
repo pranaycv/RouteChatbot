@@ -1,3 +1,2 @@
 {"attempt": 0, "id": "d2_055", "model": "google/gemini-2.5-flash-lite", "reasons": ["gold_place_missing"], "text": "car to toronto zoo from princes gates need lunch cafe scenic quiet"}
 {"attempt": 1, "id": "d2_055", "model": "meta-llama/llama-3.3-70b-instruct", "reasons": ["gold_place_missing"], "text": "go to toronto zoo from princes gates via lunch and cafe"}
-{"attempt": 0, "id": "d2_115", "reasons": ["parse_error:HTTP 429"]}
