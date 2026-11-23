@@ -12,13 +12,19 @@ lora:
 
 sft:
   num_train_epochs: 3
-  per_device_train_batch_size: 4
-  gradient_accumulation_steps: 2
+  # Effective batch 8, as the handbook's 4 x 2. Split 2 x 4 because each record is ~1,500 tokens
+  # (the label guide alone is 1,430), so a batch of 4 at that length does not fit a 10 to 16 GB card.
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 4
   learning_rate: 2.0e-4
   lr_scheduler_type: cosine
   warmup_ratio: 0.05
-  max_length: 512
-  fp16: true            # the Kaggle T4 has no bf16
+  # Measured on D1 train with the Qwen tokenizer: prompt + completion is 1,496 to 1,681 tokens.
+  # The handbook's 512 predates the label guide and truncates away every completion.
+  max_length: 2048
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: {use_reentrant: false}
+  fp16: true            # the Kaggle T4 has no bf16; train.py --bf16 switches this for an Ampere GPU
   eval_strategy: steps
   eval_steps: 50
   save_steps: 50
