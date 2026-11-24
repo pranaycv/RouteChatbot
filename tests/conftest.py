@@ -4,7 +4,12 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# The app reads .env. Tests must not, so no test can spend a real key.
+os.environ["ROUTECHAT_DOTENV"] = ""
 
 
 @pytest.fixture(autouse=True)
@@ -14,3 +19,12 @@ def _isolated_logs(tmp_path, monkeypatch):
     monkeypatch.setenv("ROUTECHAT_HANDOFF_QUEUE", str(tmp_path / "handoff_queue.jsonl"))
     for name in ("RUN_ID", "EVAL_DATASET", "EVAL_ITEM_ID"):
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_keys(monkeypatch):
+    """Blank counts as unset. The app fills a blank CLASSIFIER_BACKEND; this restores it after the test."""
+    for name in (
+        "OPENAI_API_KEY", "OPENROUTER_API_KEY", "MAPBOX_TOKEN", "GRAPHHOPPER_KEY", "CLASSIFIER_BACKEND"
+    ):
+        monkeypatch.setenv(name, "")

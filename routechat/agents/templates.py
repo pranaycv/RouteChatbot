@@ -4,7 +4,7 @@
 # Written for this project with AI assistance; no code copied from other sources.
 """Fixed replies for every early exit. No model call.
 
-The sentences are the handbook's, including its apostrophes. Two departures
+The sentences are the handbook's, including its apostrophes. Three departures
 are named here:
 
 - transit names running as well as walking, cycling, and driving, because
@@ -12,6 +12,9 @@ are named here:
 - no_route has a sentence because the schema names that error and the
   handbook does not print one. timeout uses the system-error sentence,
   because the graph stops the run with that reason before the writer is called.
+- escalate drops "Here's what I could check: …". This reply is sent when there
+  is no route, so nothing was checked. A handoff with a route is written by the
+  model, which lists its checks.
 """
 
 from __future__ import annotations
@@ -28,13 +31,20 @@ CLARIFY_ORIGIN = "Where should the route start? An address, intersection or land
 CLARIFY_DESTINATION = "Where are you heading?"
 CLARIFY_STOPS = "Which stop do you need on the way?"
 UNPARSEABLE = "I didn’t quite get that. Could you rephrase the trip?"
-ESCALATE = "This needs a person, so I’ve passed your trip to our support team. Here’s what I could check: …"
+ESCALATE = "This needs a person, so I’ve passed your trip to our support team."
 OUT_OF_SCOPE_B2B = "I can plan personal trips only. Route planning for delivery fleets or tours isn’t available."
 BOOKING_OR_PAYMENT = "I can’t book or pay for anything, but I can plan how to get there."
 LIVE_PARKING = "I don’t have live parking or store stock information."
 UNSAFE_OR_ILLEGAL = "I can’t help with that request."
 TRANSIT_NOT_SUPPORTED = (
     "Transit directions aren’t available yet. I can plan walking, running, cycling or driving."
+)
+HIKE_NOT_SUPPORTED = (
+    "Hiking routes aren’t covered yet. I can plan walking, running, cycling or driving."
+)
+CHOOSE_MODE = "How would you like to travel: walking, running, cycling or driving?"
+MODE_NOT_SUPPORTED = (
+    "I can’t plan that way of travelling yet. I can plan walking, running, cycling or driving."
 )
 SYSTEM_ERROR_TEXT = "I couldn’t reach the map service just now. Please try again in a minute."
 NO_ROUTE = "I couldn’t find a route between those places. Could you try a different start or end?"
@@ -66,11 +76,13 @@ CLARIFY_TEMPLATES: dict[str, str] = {
     "none": UNPARSEABLE,
 }
 
-# Codes the map tools and the graph can put on a handoff. hike has no code yet.
+# Codes the map tools and the graph can put on a handoff. The map tools use
+# mode_not_supported for hike, a missing mode, and an unrouted combination.
 ERROR_REASONS: tuple[str, ...] = (
     "place_not_found",
     "no_route",
     "transit_not_supported",
+    "mode_not_supported",
     "tool_timeout",
     "system_error",
     "timeout",
@@ -79,10 +91,22 @@ ERROR_REASONS: tuple[str, ...] = (
 ERROR_TEMPLATES: dict[str, str] = {
     "no_route": NO_ROUTE,
     "transit_not_supported": TRANSIT_NOT_SUPPORTED,
+    "mode_not_supported": MODE_NOT_SUPPORTED,
     "tool_timeout": SYSTEM_ERROR_TEXT,
     "system_error": SYSTEM_ERROR_TEXT,
     "timeout": SYSTEM_ERROR_TEXT,
 }
+
+
+MODE_TEMPLATES: dict[str, str] = {
+    "hike": HIKE_NOT_SUPPORTED,
+    "unspecified": CHOOSE_MODE,
+}
+
+
+def mode_not_supported_text(mode: str | None) -> str:
+    """The sentence for the mode the map tools turned away."""
+    return MODE_TEMPLATES.get(mode, MODE_NOT_SUPPORTED)
 
 
 def too_many_stops_text(limit: int) -> str:

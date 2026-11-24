@@ -20,15 +20,19 @@ import pytest
 
 from routechat.agents.templates import (
     BOOKING_OR_PAYMENT,
+    CHOOSE_MODE,
     CLARIFY_DESTINATION,
     CLARIFY_ORIGIN,
     CLARIFY_STOPS,
     DATA_REQUEST,
     EMPTY,
+    ERROR_REASONS,
     ESCALATE,
+    HIKE_NOT_SUPPORTED,
     LIVE_PARKING,
-    NO_ROUTE,
+    MODE_NOT_SUPPORTED,
     NOT_ENGLISH,
+    NO_ROUTE,
     OUT_OF_SCOPE_B2B,
     PROMPT_INJECTION,
     SYSTEM_ERROR_TEXT,
@@ -36,12 +40,13 @@ from routechat.agents.templates import (
     TRANSIT_NOT_SUPPORTED,
     UNPARSEABLE,
     UNSAFE_OR_ILLEGAL,
-    ERROR_REASONS,
 )
+from routechat.agents.maps_node import maps_node
 from routechat.agents.writer import build_facts, template_message, write_node, write_reply
 from routechat.config import get_settings
 from routechat.graph import SYSTEM_ERROR_TEXT as GRAPH_SYSTEM_ERROR_TEXT
 from routechat.guards.input_guard import guard_text
+from routechat.guards.output_guard import output_guard
 from routechat.schemas import (
     ClarifyField,
     GuardReason,
@@ -52,10 +57,11 @@ from routechat.schemas import (
     SponsoredSuggestion,
 )
 from routechat.stubs import running_candidate, running_constraints, running_places, running_report
+from routechat.verify.decide import verify_node
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLIES = ROOT / "tests" / "fixtures" / "writer_replies.json"
-PROMPT = ROOT / "prompts" / "writer_v1.md"
+PROMPT = ROOT / "prompts" / "writer_v2.md"
 SECRET = "SECRET-RAW-UTTERANCE"
 
 # WP7 banned phrases, plus the writer rule against "safe" and "guaranteed".
@@ -253,8 +259,43 @@ def test_t_6_01_error_codes_have_templates(reason: str):
     elif reason == "transit_not_supported":
         assert message == TRANSIT_NOT_SUPPORTED
         assert "running" in message
+    elif reason == "mode_not_supported":
+        assert message == MODE_NOT_SUPPORTED
     else:
         assert message == SYSTEM_ERROR_TEXT
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [("hike", HIKE_NOT_SUPPORTED), ("unspecified", CHOOSE_MODE), ("multimodal", MODE_NOT_SUPPORTED)],
+)
+def test_a_mode_the_map_tools_turn_away_gets_its_own_reply(mode: str, expected: str):
+    """WP4, WP5 and WP7 as they run in the graph. The map tools stop before any request."""
+    state = _planned(
+        request_id="r_test",
+        constraints=running_constraints().model_copy(update={"mode": mode}),
+        classification=_classify("plan", primary_mode=mode),
+    )
+    state |= maps_node(state)
+    state |= verify_node(state)
+    draft = write_reply(state, llm=_Boom())
+    assert draft.message == expected
+    assert draft.kind == "template"
+    final = output_guard(state | {"draft": draft})["final"]
+    assert final.text == expected
+
+
+def test_a_compared_hike_gets_the_hike_reply():
+    state = _planned(
+        request_id="r_test",
+        constraints=running_constraints().model_copy(
+            update={"mode": "walk", "modes_to_compare": ["walk", "hike"]}
+        ),
+        classification=_classify("compare_modes", primary_mode="walk"),
+    )
+    state |= maps_node(state)
+    state |= verify_node(state)
+    assert write_reply(state, llm=_Boom()).message == HIKE_NOT_SUPPORTED
 
 
 def test_t_6_01_extraction_gaps_and_escalate_use_templates():
@@ -296,6 +337,9 @@ def test_t_6_01_templates_do_not_make_a_promise():
         LIVE_PARKING,
         UNSAFE_OR_ILLEGAL,
         TRANSIT_NOT_SUPPORTED,
+        HIKE_NOT_SUPPORTED,
+        CHOOSE_MODE,
+        MODE_NOT_SUPPORTED,
         SYSTEM_ERROR_TEXT,
         NO_ROUTE,
     ]
@@ -402,3 +446,50 @@ def test_t_6_04_recorded_replies_pass_output_guard_rules():
     invented = dict(replies[0])
     invented["message"] = invented["message"].replace("4.2 km", "9 km")
     assert _guard_problems(invented)
+
+
+# --- The live path uses the shared client ---
+
+
+def test_the_live_writer_uses_the_shared_client(monkeypatch):
+    """OpenRouter or OpenAI is chosen in routechat.llm. The log line names the provider that answered."""
+    from routechat.agents import writer
+    from routechat.llm import LLMResult
+
+    asked: dict[str, Any] = {}
+
+    def complete(messages, model, temperature, schema):
+        asked.update(messages=messages, model=model, schema=schema)
+        text = json.dumps({"message": "Here is the route.", "mentioned_ids": ["closures"], "kind": "template"})
+        return LLMResult(text, 1200, 80, model, "openrouter", 5.0, 0.0)
+
+    lines: list[dict[str, Any]] = []
+    monkeypatch.setattr(writer, "complete", complete)
+    monkeypatch.setattr(writer, "stage_line", lambda *args, **kwargs: lines.append(kwargs))
+    draft = write_node(_planned())["draft"]
+    assert draft.kind == "llm"
+    assert draft.mentioned_ids == ["closures"]
+    assert asked["schema"] is ReplyDraft
+    assert SECRET not in json.dumps(asked["messages"])
+    assert lines[0]["api_calls"] == {"openrouter": 1}
+    assert (lines[0]["tokens_in"], lines[0]["tokens_out"]) == (1200, 80)
+
+
+def test_the_escalate_sentence_claims_no_checks():
+    assert "could check" not in ESCALATE
+    assert "…" not in ESCALATE
+
+
+def test_facts_round_the_evidence_and_carry_the_compared_route():
+    report = running_report()
+    checks = [report.checks[0].model_copy(update={"evidence": "4220.55 m; allowed range 4500 to 5500 m."})]
+    other = running_candidate().model_copy(
+        update={"id": "gh_walk_1", "mode": "walk", "distance_m": 3105.0, "duration_s": 2242.0, "duration_traffic_s": None}
+    )
+    state = _planned(
+        report=report.model_copy(update={"checks": checks}), candidates=[running_candidate(), other]
+    )
+    facts = build_facts(state)
+    assert facts["checks"][0]["evidence"] == "4.22 km; allowed range 4.5 to 5.5 km."
+    assert facts["other_route"] == {"mode": "walk", "distance_km": 3.1, "duration_min": 37}
+    assert build_facts(_planned())["other_route"] is None

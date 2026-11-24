@@ -24,14 +24,17 @@ from routechat.agents.templates import (
     GUARD_TEMPLATES,
     REFUSAL_TEMPLATES,
     UNPARSEABLE,
+    mode_not_supported_text,
     place_not_found_text,
     too_many_stops_text,
 )
 from routechat.config import get_settings
+from routechat.evidence import tidy_evidence
+from routechat.llm import api_calls_for, complete
 from routechat.logging import stage_line, token_cost
 from routechat.schemas import ReplyDraft
 
-_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "writer_v1.md"
+_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "writer_v2.md"
 PROMPT_VERSION = _PROMPT_PATH.stem
 _EARLY_GUARD = frozenset({"clarify", "refuse", "fixed_reply"})
 _EARLY_ACTIONS = frozenset({"refuse", "escalate", "clarify"})
@@ -104,6 +107,15 @@ def _error_reason(state: dict[str, Any]) -> str | None:
     return None
 
 
+def _unsupported_mode(state: dict[str, Any]) -> str | None:
+    """The mode the map tools turned away. The trip's own mode if no route says."""
+    for candidate in state.get("candidates") or []:
+        if _field(candidate, "error") == "mode_not_supported":
+            return _field(candidate, "mode")
+    constraints = state.get("constraints")
+    return _field(constraints, "mode") if constraints is not None else None
+
+
 def _missing_query(state: dict[str, Any]) -> str:
     """First place the user named that the map tools did not resolve."""
     constraints = state.get("constraints")
@@ -165,6 +177,8 @@ def template_message(state: dict[str, Any]) -> str | None:
     reason = _error_reason(state)
     if reason == "place_not_found":
         return place_not_found_text(_missing_query(state))
+    if reason == "mode_not_supported":
+        return mode_not_supported_text(_unsupported_mode(state))
     if reason is not None:
         return ERROR_TEMPLATES[reason]
 
@@ -208,6 +222,22 @@ def _sponsored_facts(report: Any) -> dict[str, Any] | None:
     }
 
 
+def _other_route_facts(state: dict[str, Any], chosen: Any) -> dict[str, Any] | None:
+    """The route a compare request also measured, for one sentence about it."""
+    for candidate in state.get("candidates") or []:
+        if candidate is chosen or _field(candidate, "error"):
+            continue
+        traffic_s = _field(candidate, "duration_traffic_s")
+        return {
+            "mode": _field(candidate, "mode"),
+            "distance_km": _round_km(_field(candidate, "distance_m")),
+            "duration_min": _round_minutes(
+                traffic_s if traffic_s is not None else _field(candidate, "duration_s")
+            ),
+        }
+    return None
+
+
 def build_facts(state: dict[str, Any]) -> dict[str, Any]:
     """Rounded facts for the model. The raw utterance is not copied in.
 
@@ -224,7 +254,7 @@ def build_facts(state: dict[str, Any]) -> dict[str, Any]:
         {
             "id": _field(check, "id"),
             "status": _field(check, "status"),
-            "evidence": _field(check, "evidence"),
+            "evidence": tidy_evidence(_field(check, "evidence")),
         }
         for check in _field(report, "checks")
     ]
@@ -238,6 +268,7 @@ def build_facts(state: dict[str, Any]) -> dict[str, Any]:
         "checks": checks,
         "must_mention": list(_field(report, "must_mention")),
         "sponsored": _sponsored_facts(report),
+        "other_route": _other_route_facts(state, candidate),
     }
 
 
@@ -255,14 +286,16 @@ def _messages(facts: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
-def _live_model() -> Any:
-    """One structured call. Tests pass their own object and never reach this."""
-    from langchain_openai import ChatOpenAI
-
+def _live(messages: list[dict[str, str]]) -> tuple[ReplyDraft, tuple[int, int], dict[str, int]]:
+    """One structured call through the shared client: OpenAI or OpenRouter, and FIXTURES record or replay."""
     settings = get_settings().writer
-    chat = ChatOpenAI(model=settings.model, temperature=settings.temperature)
-    # include_raw keeps the raw message, so token usage reaches the log.
-    return chat.with_structured_output(ReplyDraft, include_raw=True)
+    result = complete(messages, settings.model, settings.temperature, schema=ReplyDraft)
+    draft = ReplyDraft.model_validate_json(result.text)
+    return (
+        draft.model_copy(update={"kind": "llm"}),
+        (result.tokens_in, result.tokens_out),
+        api_calls_for(result.provider),
+    )
 
 
 def _as_draft(result: Any) -> ReplyDraft:
@@ -282,14 +315,16 @@ def _usage(result: Any) -> tuple[int, int]:
     return int(meta.get("input_tokens", 0) or 0), int(meta.get("output_tokens", 0) or 0)
 
 
-def _write(state: dict[str, Any], llm: Any = None) -> tuple[ReplyDraft, tuple[int, int]]:
+def _write(state: dict[str, Any], llm: Any = None) -> tuple[ReplyDraft, tuple[int, int], dict[str, int]]:
+    """The draft, its input and output tokens, and the calls it made."""
     message = template_message(state)
     if message is not None:
-        return ReplyDraft(message=message, mentioned_ids=[], kind="template"), (0, 0)
-    facts = build_facts(state)
-    model = llm if llm is not None else _live_model()
-    result = model.invoke(_messages(facts))
-    return _as_draft(result), _usage(result)
+        return ReplyDraft(message=message, mentioned_ids=[], kind="template"), (0, 0), {}
+    messages = _messages(build_facts(state))
+    if llm is None:
+        return _live(messages)
+    result = llm.invoke(messages)
+    return _as_draft(result), _usage(result), {}
 
 
 def write_reply(state: dict[str, Any], llm: Any = None) -> ReplyDraft:
@@ -304,7 +339,7 @@ def write_node(state: dict[str, Any], llm: Any = None) -> dict[str, ReplyDraft]:
     only when the model wrote the reply; a template costs nothing.
     """
     started = time.perf_counter()
-    draft, (tokens_in, tokens_out) = _write(state, llm)
+    draft, (tokens_in, tokens_out), api_calls = _write(state, llm)
     model = get_settings().writer.model if draft.kind == "llm" else None
     stage_line(
         "write",
@@ -314,7 +349,7 @@ def write_node(state: dict[str, Any], llm: Any = None) -> dict[str, ReplyDraft]:
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         cost_usd=token_cost(model, tokens_in, tokens_out),
-        api_calls={"openai": 1} if draft.kind == "llm" and llm is None else {},
+        api_calls=api_calls,
         model=model,
         prompt_version=PROMPT_VERSION if model else None,
     )

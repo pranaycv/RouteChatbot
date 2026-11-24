@@ -1,6 +1,7 @@
 """WP0 graph tests: T-0-01 through T-0-05."""
 
 import logging
+import subprocess
 import time
 from pathlib import Path
 
@@ -44,12 +45,12 @@ def _guard(decision: str) -> dict:
     return {"guard": GuardResult(decision=decision, clean_text="hello", masked=[], reason=None)}
 
 
-def _classification(action: str) -> RouteClassification:
+def _classification(action: str, clarify_field: str = "none") -> RouteClassification:
     return RouteClassification(
         route_action=action,
         primary_mode="bike",
         needs_live_data=False,
-        clarify_field="none",
+        clarify_field=clarify_field,
         refusal_reason="none",
     )
 
@@ -86,6 +87,9 @@ def _report(decision: str) -> VerificationReport:
         (after_classify, {"classification": _classification("escalate"), "clarify_count": 0}, "write"),
         (after_classify, {"classification": _classification("refuse"), "clarify_count": 0}, "write"),
         (after_classify, {"classification": _classification("clarify"), "clarify_count": 1}, "write"),
+        (after_classify, {"classification": _classification("clarify", "origin"), "clarify_count": 0}, "extract"),
+        (after_classify, {"classification": _classification("clarify", "destination"), "clarify_count": 1}, "extract"),
+        (after_classify, {"classification": _classification("clarify", "stops"), "clarify_count": 0}, "write"),
         (after_extract, {"constraints": _constraints()}, "maps"),
         (after_extract, {"constraints": _constraints(missing_field="origin")}, "write"),
         (after_extract, {"constraints": _constraints(too_many_stops=True)}, "write"),
@@ -130,6 +134,65 @@ def test_t_0_03_revise_loop_happens_once():
     # The first maps call is the normal path. The second is the single revise.
     assert visits == ["maps", "verify", "maps", "verify"]
     assert state["final"].approved is True
+
+
+def _double_checked(clarify_field: str, constraints: ConstraintSet, **payload) -> tuple[dict, list, list[str]]:
+    """Run the stubs with a classifier that asks for a place. Returns the state, what extract read, and the visits."""
+    nodes, read, visits = stub_nodes(), [], []
+    nodes["classify"] = lambda _state: {"classification": _classification("clarify", clarify_field)}
+
+    def extract(state):
+        read.append(state["classification"])
+        return {"constraints": constraints}
+
+    nodes["extract"] = extract
+    for name in ("maps", "verify", "write"):
+        stub = nodes[name]
+        nodes[name] = lambda state, name=name, stub=stub: visits.append(name) or stub(state)
+    return invoke({**PAYLOAD, **payload}, nodes), read, visits
+
+
+def test_a_clarify_the_extractor_can_answer_becomes_a_trip():
+    state, read, visits = _double_checked("origin", running_constraints())
+    assert visits == ["maps", "verify", "write"]
+    assert (read[0].route_action, read[0].clarify_field) == ("plan", "none")
+    assert state["classification"].route_action == "plan"
+    assert state["classification"].clarify_field == "none"
+
+
+def test_a_double_checked_clarify_on_a_known_trip_becomes_a_replan():
+    state, read, _ = _double_checked("destination", running_constraints(), known=running_constraints(), turn_index=1)
+    assert read[0].route_action == "replan"
+    assert state["classification"].route_action == "replan"
+
+
+def test_a_clarify_is_kept_and_asks_for_the_end_the_extractor_missed():
+    state, _, visits = _double_checked("origin", _constraints(missing_field="destination", destination=None))
+    assert visits == ["write"]
+    assert state["classification"].route_action == "clarify"
+    assert state["classification"].clarify_field == "destination"
+
+
+def test_a_double_checked_clarify_is_still_escalated_after_one_followup():
+    missing = _constraints(missing_field="origin", origin=None)
+    state, _, visits = _double_checked("origin", missing, clarify_count=1)
+    assert visits == ["write"]
+    assert state["classification"].route_action == "escalate"
+    # With both ends found, the same follow-up is planned.
+    state, _, visits = _double_checked("origin", running_constraints(), clarify_count=1)
+    assert visits == ["maps", "verify", "write"]
+
+
+def test_an_unreadable_message_keeps_the_classifiers_question():
+    state, _, _ = _double_checked("origin", _constraints(missing_field="unparseable"))
+    assert state["classification"].route_action == "clarify"
+    assert state["classification"].clarify_field == "origin"
+
+
+def test_too_many_stops_in_a_double_checked_clarify_is_answered_as_a_trip():
+    state, _, visits = _double_checked("origin", _constraints(too_many_stops=True))
+    assert visits == ["write"]
+    assert state["classification"].route_action == "plan"
 
 
 def test_clarify_after_one_followup_is_escalate():
@@ -202,14 +265,27 @@ def test_timeout_in_a_revise_loop_stops_before_maps():
     assert state["handoff"].reason == "timeout"
 
 
+def _repository_files() -> list[Path]:
+    """Files git tracks or would add. A git-ignored file, such as .env, cannot be committed by accident.
+
+    A tracked file is listed even if it also matches .gitignore.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+    ).stdout.decode("utf-8")
+    paths = [ROOT / name for name in listed.split("\0") if name]
+    assert paths, "git listed no files"
+    return [path for path in paths if path.is_file()]
+
+
 def test_t_0_05_repository_has_no_key_material():
     # Built by concatenation so this test file does not itself contain the markers it scans for.
     markers = ("s" + "k-", "p" + "k" + ".")
-    skip_dirs = {".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
     offenders: list[str] = []
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or skip_dirs.intersection(path.parts):
-            continue
+    for path in _repository_files():
         if path.name == ".env.example":
             continue
         text = path.read_bytes().decode("utf-8", errors="ignore")
