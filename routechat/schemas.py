@@ -20,9 +20,8 @@ RouteAction = Literal[
     "refuse",
 ]
 # Accepted modes are walk, run, bike, and car. A run is routed like a walk.
-# A combination of those four is also accepted. hike and transit stay in the
-# list so they can be named and turned away. multimodal is accepted only when
-# every part is one of the four allowed modes.
+# Each trip uses one mode. hike, transit, and multimodal (a combined trip)
+# stay in the list so they can be named and turned away.
 PrimaryMode = Literal[
     "walk",
     "bike",

@@ -145,15 +145,20 @@ def _element_types(node) -> list[str]:
 
 
 def _fake_invoke(monkeypatch, actions: list[str]) -> list[dict]:
-    """Record each payload. Reply with these classifier actions in order, and no route."""
+    """Record each payload. Reply with these classifier actions in order, and no route.
+
+    "verifier_clarify" is a planned trip the verifier asks about. "verifier_escalate" is the second
+    such question, as the graph relabels it.
+    """
     from routechat import graph
-    from routechat.schemas import FinalAnswer, RouteClassification
+    from routechat.schemas import FinalAnswer, RouteClassification, VerificationReport
     from routechat.stubs import running_constraints
 
     sent: list[dict] = []
 
     def invoke(payload):
-        action = actions[len(sent)]
+        step = actions[len(sent)]
+        action = {"verifier_clarify": "plan", "verifier_escalate": "escalate"}.get(step, step)
         sent.append(payload)
         state = {
             **payload,
@@ -168,8 +173,13 @@ def _fake_invoke(monkeypatch, actions: list[str]) -> list[dict]:
                 approved=True, text="ok", route_geojson=None, stops=[], used_fallback_template=False
             ),
         }
-        if action in {"plan", "clarify"}:
+        if action in {"plan", "clarify"} or step == "verifier_escalate":
             state["constraints"] = running_constraints()
+        if step.startswith("verifier_"):
+            state["report"] = VerificationReport(
+                decision="clarify", chosen_route=None, checks=[], must_mention=[],
+                sponsored=None, handoff_reason="place_not_found",
+            )
         return state
 
     monkeypatch.setattr(graph, "invoke", invoke)
@@ -233,6 +243,30 @@ def test_an_escalated_trip_opens_a_ticket_and_the_next_trip_starts_fresh(monkeyp
     assert sent[2]["utterance"] == "bike to the ROM"
     assert sent[2]["clarify_count"] == 0
     assert "Nothing is waiting" not in " ".join(block.value for block in app.markdown)
+
+
+def test_a_verifier_question_counts_and_its_escalation_opens_one_ticket(monkeypatch):
+    from routechat.logging import read_handoffs
+
+    before = len(read_handoffs())
+    _, sent = _run_turns(
+        monkeypatch,
+        ["verifier_clarify", "verifier_escalate", "plan"],
+        ["bike to Nowhere", "Nowhere Hall", "bike to the ROM"],
+    )
+    assert [payload["clarify_count"] for payload in sent] == [0, 1, 0]
+    # The answer is a follow-up on the trip the verifier asked about, sent on its own.
+    assert sent[1]["known"] is not None and sent[1]["utterance"] == "Nowhere Hall"
+    # The escalated trip is not carried into the next one.
+    assert sent[2]["known"] is None and sent[2]["turn_index"] == 0
+    assert [ticket["reason"] for ticket in read_handoffs()[before:]] == ["still_unclear"]
+
+
+def test_an_answered_verifier_question_resets_the_count(monkeypatch):
+    _, sent = _run_turns(
+        monkeypatch, ["verifier_clarify", "plan", "verifier_clarify"], ["to the ROM", "cycling", "skip the stop"]
+    )
+    assert [payload["clarify_count"] for payload in sent] == [0, 1, 0]
 
 
 def test_the_map_stays_when_a_reply_has_no_route(monkeypatch):

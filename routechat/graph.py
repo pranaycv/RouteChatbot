@@ -233,6 +233,9 @@ def _settle_clarify(state: TripState, trip: TripState, update: dict) -> dict:
 def _escalate_stale_clarify(state: TripState) -> tuple[TripState, dict]:
     """Turn a second clarify into escalate before the writer sees the state.
 
+    The classifier can ask, and so can the verifier when the map tools find no
+    mode or no such place. P-08 allows one follow-up in either case.
+
     The app keeps clarify_count between turns. The routing table calls this
     case "write, as escalate". The writer only picks a template from
     route_action, so the label change lives here, in the graph, rather than
@@ -241,7 +244,9 @@ def _escalate_stale_clarify(state: TripState) -> tuple[TripState, dict]:
     classification = state.get("classification")
     if classification is None:
         return state, {}
-    if _field(classification, "route_action") != "clarify":
+    report = state.get("report")
+    verifier_asks = report is not None and _field(report, "decision") == "clarify"
+    if _field(classification, "route_action") != "clarify" and not verifier_asks:
         return state, {}
     if state.get("clarify_count", 0) < 1:
         return state, {}

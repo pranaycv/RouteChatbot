@@ -587,18 +587,21 @@ def _ask(utterance: str) -> None:
     st.session_state.history.append({"role": "assistant", "content": answer})
     constraints = state.get("constraints")
     action = _field(state.get("classification"), "route_action")
+    report = state.get("report")
+    escalated = action == "escalate"
     # A clarify may carry a half-read trip. The pending message is what the answer is joined to.
+    # A trip passed to a person is finished here, so the next message starts a new one.
     if constraints is not None and action != "clarify":
-        st.session_state.known = constraints
+        st.session_state.known = None if escalated else constraints
     asked_before = st.session_state.clarify_count > 0
     if action == "clarify":
         st.session_state.clarify_count += 1
         st.session_state.pending = request
     elif action is not None:
-        st.session_state.clarify_count = 0
+        # The verifier asks about a trip that is already known, so its answer is a follow-up on that trip.
+        asks = not escalated and _field(report, "decision") == "clarify"
+        st.session_state.clarify_count = st.session_state.clarify_count + 1 if asks else 0
         st.session_state.pending = None
-    report = state.get("report")
-    escalated = action == "escalate"
     if escalated or _field(report, "decision") == "handoff" or state.get("handoff") is not None:
         reason = "still_unclear" if asked_before else "needs_a_person"
         ticket = state.get("handoff") or {
