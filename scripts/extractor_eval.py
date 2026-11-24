@@ -20,11 +20,15 @@ eval/results/extractor_predictions.jsonl (every prediction next to its gold, for
 Runs with FIXTURES=record so a rerun replays what was already paid for.
 
 Two scores per field. Strict: normalised string equality (case and surrounding space; lists as sets; stops as
-(query, category, required)). Lenient: in addition ignores a leading article, tolerates spelling (difflib ratio
->= 0.85, so "Scoatiabank Arena" matches "Scotiabank Arena"), accepts a null destination for a loop whose gold
-destination repeats the origin (ConstraintSet semantics v1: a loop has no destination), and compares stops by
-query only, because D2 labels categories with its own vocabulary (named_place, restaurant, fuel_or_charging)
-and the semantics doc with another (null for a named place, ev_charging_station). Strict is the headline.
+(query, category, required)). Lenient, the *_lenient columns: for origin, destination and stop queries a leading
+article is ignored and spelling is tolerated (difflib ratio >= 0.85, so "Scoatiabank Arena" matches "Scotiabank
+Arena"); stops still have to agree on category and required. The extractor copies the user's spelling by design
+and the D2 gold carries canonical place names (kept for the map stage, agreed with WP8 on 24 Nov), so the lenient
+score is the headline for the three place fields and strict is reported next to it. Until 24 Nov the lenient
+column also accepted a loop destination that repeated the origin and compared stops by query only, because D2
+used its own stop vocabulary; D2 follows the ConstraintSet semantics since WP8 commit bf99db7 (loop destination
+null, named stop category null, generic stop query == category == type word, ev_charging_station), so both
+allowances are gone and the two columns differ by spelling and articles only.
 
 EXTRACTOR_PROMPT_VERSION=extractor_v2 scores another prompt version; --append merges its rows into the existing
 CSV and predictions (keyed by variant and prompt_version) instead of overwriting them.
@@ -93,16 +97,19 @@ def places_match(a, b) -> bool:
 
 def lenient_hit(field: str, pred: ConstraintSet, gold: ConstraintSet) -> bool:
     if field in ("origin", "destination"):
-        pv, gv = getattr(pred, field), getattr(gold, field)
-        if field == "destination" and gold.loop and gv and pv is None and place_key(gv) == place_key(gold.origin):
-            return True  # semantics v1: a loop has no destination; the D2 gold repeats the origin
-        return places_match(pv, gv)
+        return places_match(getattr(pred, field), getattr(gold, field))
     if field == "stops":
+        # Same number of stops, and every gold stop matched to a distinct predicted stop with the same category
+        # and required flag and an article- and spelling-tolerant query.
         if len(pred.stops) != len(gold.stops):
             return False
+
+        def same_stop(s, g) -> bool:
+            return (s.category or "").strip().lower() == (g.category or "").strip().lower() and bool(s.required) == bool(g.required) and places_match(s.query, g.query)
+
         used: set[int] = set()
         for g in gold.stops:
-            match = next((i for i, s in enumerate(pred.stops) if i not in used and places_match(s.query, g.query)), None)
+            match = next((i for i, s in enumerate(pred.stops) if i not in used and same_stop(s, g)), None)
             if match is None:
                 return False
             used.add(match)
