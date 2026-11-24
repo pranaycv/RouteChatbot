@@ -10,6 +10,12 @@ What it does
   twice. FIXTURES=replay reads them back and never touches the network, so tests and evaluation
   run offline and free; a missing fixture raises LLMFixtureMissing with the key. FIXTURES=refresh
   forces a live call and overwrites the saved response.
+- Retry profiles. The live app has a 30 s budget per turn that the graph checks only between
+  stages, so each call bounds its own worst case: profile "live" (the default) allows three
+  attempts started within 3 s of the first, 1 s to 3 s apart, 15 s per call, worst case 21.5 s.
+  Profile "eval" (automatic under FIXTURES=record|refresh, or LLM_RETRY_PROFILE=eval) keeps six
+  attempts 2 s to 60 s apart so a recorded run over hundreds of records survives a one-minute
+  rate limit. LLM_TIMEOUT_S overrides the per-call timeout. The SDK's own retries are off.
 - Prices from config.yaml give cost_usd per call.
 - log_stage writes one JSON line per stage call in the WP10 stage-line format (eval/log_schema.py).
 
@@ -29,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential_jitter
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_after_delay, wait_exponential_jitter
 
 from routechat.config import ROOT, get_settings
 
@@ -108,15 +114,64 @@ def provider_and_client_kwargs() -> tuple[str, dict[str, Any]]:
     raise LLMNoKey("set OPENAI_API_KEY or OPENROUTER_API_KEY in .env, or run with FIXTURES=replay")
 
 
-@retry(
-    stop=stop_after_attempt(6),
-    wait=wait_exponential_jitter(initial=2, max=60),
-    retry=retry_if_exception(_is_transient),
-    before_sleep=lambda state: logger.warning(
-        '{"event": "llm_retry", "attempt": %d, "error": "%s"}', state.attempt_number, type(state.outcome.exception()).__name__
-    ),
-    reraise=True,
-)
+# Retry profiles (24 Nov review). A new attempt starts only inside window_s of the first one, so the
+# worst case of one complete() call is window_s + one longest wait + one timeout: live 3 + 3.5 + 15 =
+# 21.5 s, against the app's 30 s turn budget; the usual 429 burst resolves in 2 s to 4 s and a healthy
+# call (p95 under 3 s for the classifier and extractor) never waits. eval keeps the long policy for
+# recorded evaluation runs: six attempts, 2 s to 60 s apart. The SDK's own retries are off
+# (max_retries=0) so this is the only retry layer.
+_RETRY_PROFILES: dict[str, dict[str, float | int | None]] = {
+    "live": {"attempts": 3, "window_s": 3.0, "wait_initial_s": 1.0, "wait_max_s": 3.0, "jitter_s": 0.5, "timeout_s": 15.0},
+    "eval": {"attempts": 6, "window_s": None, "wait_initial_s": 2.0, "wait_max_s": 60.0, "jitter_s": 1.0, "timeout_s": 120.0},
+}
+
+
+def retry_profile() -> str:
+    """LLM_RETRY_PROFILE=live|eval when set; else "eval" while recording fixtures (FIXTURES=record|refresh), else "live"."""
+    name = os.environ.get("LLM_RETRY_PROFILE", "").strip().lower()
+    if name in _RETRY_PROFILES:
+        return name
+    return "eval" if os.environ.get("FIXTURES", "").strip().lower() in ("record", "refresh") else "live"
+
+
+def retry_policy(profile: str | None = None) -> dict[str, float | int | None]:
+    """The numbers behind a profile; LLM_TIMEOUT_S overrides the per-call timeout."""
+    policy = dict(_RETRY_PROFILES[profile or retry_profile()])
+    override = os.environ.get("LLM_TIMEOUT_S", "").strip()
+    if override:
+        policy["timeout_s"] = float(override)
+    return policy
+
+
+def worst_case_seconds(profile: str) -> float:
+    """Upper bound on the wall time of one complete() call under a profile."""
+    p = retry_policy(profile)
+    longest_wait = float(p["wait_max_s"]) + float(p["jitter_s"])
+    if p["window_s"] is not None:  # the last attempt starts at most window_s + one wait after the first
+        return float(p["window_s"]) + longest_wait + float(p["timeout_s"])
+    n = int(p["attempts"])
+    return (n - 1) * longest_wait + n * float(p["timeout_s"])
+
+
+def _retrying(profile: str, sleep=None) -> Retrying:
+    p = retry_policy(profile)
+    stop = stop_after_attempt(int(p["attempts"]))
+    if p["window_s"] is not None:
+        stop = stop | stop_after_delay(float(p["window_s"]))
+    extra = {"sleep": sleep} if sleep is not None else {}
+    return Retrying(
+        stop=stop,
+        wait=wait_exponential_jitter(initial=float(p["wait_initial_s"]), max=float(p["wait_max_s"]), jitter=float(p["jitter_s"])),
+        retry=retry_if_exception(_is_transient),
+        before_sleep=lambda state: logger.warning(
+            '{"event": "llm_retry", "profile": "%s", "attempt": %d, "error": "%s"}',
+            profile, state.attempt_number, type(state.outcome.exception()).__name__,
+        ),
+        reraise=True,
+        **extra,
+    )
+
+
 def _live_call(
     messages: list[Message],
     model: str,
@@ -125,11 +180,24 @@ def _live_call(
     schema: type | None,
     reasoning_effort: str | None = None,
 ) -> tuple[str, int, int, str]:
-    """One network call through langchain-openai, retried with backoff on transient errors.
+    """One network call, retried on transient errors under the active retry profile (_RETRY_PROFILES)."""
+    profile = retry_profile()
+    timeout_s = float(retry_policy(profile)["timeout_s"])
+    return _retrying(profile)(_live_call_once, messages, model, temperature, max_tokens, schema, reasoning_effort, timeout_s)
 
-    Returns (text, tokens_in, tokens_out, provider). A 429 burst from the provider is the common
-    case: up to six attempts, 2 s to 60 s apart, so an evaluation run over hundreds of records
-    does not lose rows to a one-minute rate limit. A reasoning model takes reasoning_effort
+
+def _live_call_once(
+    messages: list[Message],
+    model: str,
+    temperature: float,
+    max_tokens: int | None,
+    schema: type | None,
+    reasoning_effort: str | None,
+    timeout_s: float,
+) -> tuple[str, int, int, str]:
+    """One network call through langchain-openai with one timeout and no retries of its own.
+
+    Returns (text, tokens_in, tokens_out, provider). A reasoning model takes reasoning_effort
     (low, medium, high) and no temperature, which those models reject.
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -138,9 +206,9 @@ def _live_call(
     provider, kwargs = provider_and_client_kwargs()
     model_name = f"openai/{model}" if provider == "openrouter" and "/" not in model else model
     if reasoning_effort:
-        llm = ChatOpenAI(model=model_name, reasoning_effort=reasoning_effort, max_tokens=max_tokens, **kwargs)
+        llm = ChatOpenAI(model=model_name, reasoning_effort=reasoning_effort, max_tokens=max_tokens, timeout=timeout_s, max_retries=0, **kwargs)
     else:
-        llm = ChatOpenAI(model=model_name, temperature=temperature, max_tokens=max_tokens, **kwargs)
+        llm = ChatOpenAI(model=model_name, temperature=temperature, max_tokens=max_tokens, timeout=timeout_s, max_retries=0, **kwargs)
     roles = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
     lc_messages = [roles[m["role"]](content=m["content"]) for m in messages]
     if schema is not None:
