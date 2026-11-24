@@ -301,3 +301,11 @@ def test_T_10_18_p09_after_pr18_and_reused_run_id(tmp_path):
     p = tmp_path / "logs" / "r.jsonl"
     p.parent.mkdir(); p.write_text('{"stage": "classify", "cost_usd": 1}\n')
     assert fresh_log(p) == p and not p.exists() and len(list(p.parent.glob("r.*.old.jsonl"))) == 1
+
+
+def test_T_10_19_logs_and_datasets_read_as_utf8(tmp_path):
+    # Windows reads text as cp1252 by default; accented place names in D1 must come back intact.
+    from eval.run_eval import read_jsonl
+    p = tmp_path / "d.jsonl"
+    p.write_bytes('{"item_id": "hw_1", "utterance": "Walk to Gare Centrale, Montréal"}\n'.encode("utf-8"))
+    assert read_jsonl(p)[0]["utterance"].endswith("Montréal")
