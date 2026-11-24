@@ -150,7 +150,11 @@ html, body, [data-testid="stAppViewContainer"], .stApp {
   color: var(--text);
   font-family: var(--font);
 }
-[data-testid="stHeader"] { background: transparent; height: 0; }
+/* On Streamlit Cloud this bar fills with links and lies over the top bar, so a tap must pass through it. */
+[data-testid="stHeader"] { background: transparent; height: 0; pointer-events: none; }
+[data-testid="stHeader"] * { pointer-events: none; }
+[data-testid="stStatusWidget"], [data-testid="stStatusWidget"] * { pointer-events: auto; }
+[data-testid="stToolbarActions"] { display: none !important; }
 #MainMenu, footer, [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stMain"], [data-testid="stAppViewContainer"] { overflow: hidden; }
 .block-container {
@@ -596,7 +600,8 @@ button:focus-visible {
 /* Phones, upright tablets, and phones on their side: one column that scrolls as a page. */
 @media (max-width: 900px), (max-height: 560px) {
   [data-testid="stMain"] { overflow: hidden auto !important; }
-  .block-container { padding: 12px !important; }
+  /* The space below the last card is for the badge Streamlit Cloud puts in the corner. */
+  .block-container { padding: 12px 12px 64px !important; }
   .block-container > [data-testid="stVerticalBlock"] { gap: 12px !important; }
 
   [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .st-key-rail) {
