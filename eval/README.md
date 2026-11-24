@@ -71,7 +71,8 @@ bash eval/final_run.sh                             # the final run, once every s
   each requirement), not a comparison with Google Maps. A dollar value of time is optional.
 
 - Cost assumptions filled from the Nov 14 proposal (no objections). Training cost is $0.69: 1.97 GPU-hours on
-  a Kaggle T4 at the rate in finetune/config.yaml (WP9, Nov 24). Classifier hosting assumes CPU [WP9 to confirm].
+  a Kaggle T4 at the rate in finetune/config.yaml (WP9, Nov 24). Classifier hosting is one T4 GPU ($252 a month): on CPU the
+  fine-tuned model took 19.9 s per call (WP9, Nov 24) (int8 was slower still).
 
 - The run log comes from WP7's logger (`routechat/logging.py`, merged Nov 23). `run_eval` points it at
   `logs/<run_id>_<dataset>.jsonl` (D2, D3) with `ROUTECHAT_LOG`, so each run and dataset has its own file; the classifier step

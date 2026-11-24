@@ -18,7 +18,7 @@ eur_to_usd: 1.10                             # GraphHopper is priced in EUR. EUR
 
 fixed_monthly_usd:
   app_hosting: 30                            # one small server, ~t3.medium on-demand ($0.0416/h); range 0 to 50
-  classifier_hosting: 30                     # CPU instance [WP9: confirm]. The fine-tuned 1.5B model took ~3.1 s per call on an RTX 3080 GPU, so CPU may be too slow; a GPU would cost far more
+  classifier_hosting: 252                    # one T4 GPU always on, $0.35/h x 720 h (WP9). CPU is ~7x slower: 19.9 s per call on 8 cores (Rishi, Nov 24) (int8 on CPU was slower still, 44.7 s)
   training_one_off: 0.69                     # WP9: 1.97 GPU-hours on Kaggle T4, priced at the T4 rate in finetune/config.yaml (Rishi, Nov 24)
   amortise_months: 12                        # [team to agree]
 
