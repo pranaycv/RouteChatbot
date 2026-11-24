@@ -471,3 +471,61 @@ def test_t_8_38_d2_coords_and_cp1252_import(tmp_path):
     assert D.import_d2_handwritten(str(tmp_path / "h.csv"), str(tmp_path)) == 1
     got = next(r for r in D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl")) if r["id"] == hw["id"])
     assert got["message"] == "caf\xe9 stop"
+
+
+def test_t_8_39_loops_manifest_and_no_hike_handoff(tmp_path):
+    """Loop destinations copy the origin point; a loop with its origin removed loses the destination;
+    the manifest hash ignores line endings; the hike handoff reason is gone."""
+    import shutil
+    from data_gen import datasets as D
+    for f in ("d2_end_to_end.jsonl", "d3_adversarial.jsonl"):
+        shutil.copy(Path(D.DATASETS_DIR) / f, tmp_path / f)
+    D.fix_d2_loops(str(tmp_path))
+    recs = D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl"))
+    for r in recs:
+        cs, co = r["gold_constraint_set"], r["gold_coordinates"] or {}
+        if cs and cs["loop"] and cs["origin"]:
+            assert co["destination"]["lat"] == co["origin"]["lat"]
+        if cs and cs["loop"] and cs["missing_field"] == "origin":
+            assert cs["destination"] is None and "destination" not in co
+    assert D.fix_d2_loops(str(tmp_path)) == {"loop_destination_copied": [], "loop_destination_cleared": []}
+    crlf = tmp_path / "x.jsonl"
+    crlf.write_bytes(b'{"a": 1}\r\n')
+    lf = tmp_path / "y.jsonl"
+    lf.write_bytes(b'{"a": 1}\n')
+    assert D.lf_sha256(crlf) == D.lf_sha256(lf)
+    assert all(h != "unfamiliar_terrain_hike" for h, _ in D.HANDOFF_PLAN)
+
+
+def test_t_8_40_gold_constraints_follow_extractor_semantics(tmp_path):
+    """Evaluator view: loop destination null, named stop category null, generic stop query == category == type word,
+    charging stop is ev_charging_station; refresh is idempotent."""
+    import shutil
+    from data_gen import datasets as D
+    shutil.copy(Path(D.DATASETS_DIR) / "d2_end_to_end.jsonl", tmp_path / "d2_end_to_end.jsonl")
+    D.refresh_gold_constraints(str(tmp_path))
+    assert D.refresh_gold_constraints(str(tmp_path))["gold_constraints_updated"] == 0
+    for r in D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl")):
+        g = r["gold_constraints"]
+        if not g:
+            continue
+        assert not (g["loop"] and g["destination"])
+        for s in g["stops"]:
+            assert s["category"] in (None, *D.STOP_TYPE_WORD.values())
+            assert s["category"] is None or s["query"] == s["category"]
+            assert s["category"] != "fuel_or_charging"
+
+
+def test_t_8_41_more_than_three_required_stops_is_handoff(tmp_path):
+    """The planner limit is 3 required stops: more is a too_many_stops handoff, and the flag matches the rule."""
+    import shutil
+    from data_gen import datasets as D
+    shutil.copy(Path(D.DATASETS_DIR) / "d2_end_to_end.jsonl", tmp_path / "d2_end_to_end.jsonl")
+    D.fix_d2_stop_limit(str(tmp_path))
+    assert D.fix_d2_stop_limit(str(tmp_path))["relabelled_to_handoff"] == []
+    for r in D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl")):
+        cs = r["gold_constraint_set"]
+        if cs:
+            n = sum(1 for s in cs["stops"] if s.get("required", True))
+            assert (n > 3) == bool(cs["too_many_stops"])
+            assert (n > 3) <= (r["expected_outcome"] == "handoff")

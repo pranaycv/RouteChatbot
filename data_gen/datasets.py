@@ -92,8 +92,8 @@ if spec.TRANSIT_POLICY == "named_mode":     # no out_of_scope_mode reason: give 
     REFUSE_PLAN = [(r, k + {"out_of_scope_b2b": 2, "live_parking_or_inventory": 2}.get(r, 0))
                    for r, k in REFUSE_PLAN if r != "out_of_scope_mode"]
 assert sum(k for _, k in REFUSE_PLAN) == D2_OUTCOMES["refuse"]
-HANDOFF_PLAN = [("too_many_stops", 4), ("infeasible_deadline", 4), ("unverifiable_guarantee", 4),
-                ("contradictory_request", 3), ("unfamiliar_terrain_hike", 3)]
+HANDOFF_PLAN = [("too_many_stops", 5), ("infeasible_deadline", 5), ("unverifiable_guarantee", 4),
+                ("contradictory_request", 4)]
 
 # Row-specific recipe for building the gold ConstraintSet.
 ROW_RECIPES: Dict[int, dict] = {
@@ -275,17 +275,6 @@ def _handoff(reason: str, rng, b, city) -> Tuple[dict, dict, dict, str]:
             cs["stops"].append({"query": p["name"], "category": "named_place", "required": True, "order": i + 1})
             coords["stops"].append(_coord(p, f"stop_{i + 1}"))
         return cs, coords, extra, f"{n} required stops exceed the planner limit"
-    if reason == "unfamiliar_terrain_hike":
-        # A hike on remote or unfamiliar terrain: trail safety/conditions cannot be verified by the planner.
-        try:
-            o2 = _place(b, city, "park", rng)
-            d2 = _place(b, city, "park", rng, exclude=[o2["name"]])
-            cs.update(origin=o2["name"], destination=d2["name"])
-            coords.update(origin=_coord(o2, "origin"), destination=_coord(d2, "destination"))
-        except Exception:       # a city with fewer than two parks keeps the landmark pair
-            pass
-        cs.update(mode="hike", ambiguities=["unfamiliar_terrain: trail safety and conditions cannot be verified"])
-        return cs, coords, extra, "hike on unfamiliar or remote terrain; trail safety and conditions cannot be verified"
     if reason == "unverifiable_guarantee":
         cs.update(mode="walk", required_accessibility=["step_free"], prefer=["step_free"], ambiguities=["guarantee_requested"])
         return cs, coords, extra, "user demands a guarantee that access features work; cannot be verified"
@@ -304,8 +293,6 @@ def d2_messages(rec: dict, retry: int = 0) -> List[dict]:
                  "Mention every fact in the brief; do not leave any out.")
     if rec["expected_outcome"] == "handoff" and rec.get("handoff_reason") == "unverifiable_guarantee":
         user_extra = " The person insists the assistant must GUARANTEE the access features work."
-    elif rec["expected_outcome"] == "handoff" and rec.get("handoff_reason") == "unfamiliar_terrain_hike":
-        user_extra = " The person is a visitor who does not know the area and wants to hike a long, remote trail, and asks whether it is safe."
     elif rec["expected_outcome"] == "handoff" and rec.get("handoff_reason", "").startswith("contradictory"):
         user_extra = " The person says they want to avoid all roads but also that they are driving."
     else:
@@ -357,10 +344,18 @@ def _strip_place_names(text: str) -> str:
     return text
 
 
+# Stop type words used by the extractor (docs/constraintset_semantics_v1.md): a generic stop has query == category ==
+# the type word; a named place has category null; a charging stop is "ev_charging_station" (no fuel_or_charging).
+STOP_TYPE_WORD = {"cafe": "coffee", "restaurant": "lunch", "pharmacy": "pharmacy", "bank": "bank", "grocery": "grocery",
+                  "playground": "playground", "viewpoint": "viewpoint", "fuel_or_charging": "ev_charging_station"}
+
+
 def repo_gold_constraints(cs: Optional[dict]) -> Optional[dict]:
-    """Internal gold (rich, used for QC) -> frozen v1 ConstraintSet. Differences handled here:
-    required_accessibility is a bool; missing_field only allows origin/destination/unparseable
-    (a missing STOP is signalled by the classifier's clarify_field, not by the extractor); mode is never null."""
+    """Internal gold (rich, used for QC) -> the extractor's ConstraintSet, as in docs/constraintset_semantics_v1.md.
+    Differences handled here: required_accessibility is a bool; missing_field only allows origin/destination/unparseable
+    (a missing STOP is signalled by the classifier's clarify_field, not by the extractor); mode is never null;
+    a loop has destination null (origin only); named stops have category null; generic stops use the type word
+    for both query and category; a charging stop is ev_charging_station."""
     if cs is None:
         return None
     out = dict(cs)
@@ -369,7 +364,63 @@ def repo_gold_constraints(cs: Optional[dict]) -> Optional[dict]:
         out["missing_field"] = None
     out["mode"] = out.get("mode") or "unspecified"
     out["modes_to_compare"] = [m for m in out.get("modes_to_compare") or []]
+    if out.get("loop"):
+        out["destination"] = None
+    stops = []
+    for st in out.get("stops") or []:
+        st = dict(st)
+        if st.get("category") == "named_place":
+            st["category"] = None
+        elif st.get("category") in STOP_TYPE_WORD:
+            st["category"] = st["query"] = STOP_TYPE_WORD[st["category"]]
+        stops.append(st)
+    out["stops"] = stops
     return contracts.validate_constraints(out) if contracts.available() else out
+
+
+MAX_REQUIRED_STOPS = 3      # config.yaml trip.max_required_stops; more than this is a too-many-stops handoff
+
+
+def relabel_too_many_stops(recs: List[dict]) -> List[str]:
+    """A record with more than MAX_REQUIRED_STOPS required stops is a handoff (reason too_many_stops), whatever it was
+    generated as. The ConstraintSet flag is set by code from the same rule. Idempotent; returns the ids it changed."""
+    changed = []
+    for r in recs:
+        cs = r.get("gold_constraint_set")
+        if not cs:
+            continue
+        n = sum(1 for st in cs.get("stops") or [] if st.get("required", True))
+        if n > MAX_REQUIRED_STOPS and not cs.get("too_many_stops"):
+            cs["too_many_stops"] = True
+            r["gold_constraints"] = repo_gold_constraints(cs)
+            if r["expected_outcome"] != "handoff":
+                r.update(expected_outcome="handoff", expected_route_action="escalate", refusal_reason="none",
+                         handoff_reason="too_many_stops",
+                         handoff_explanation=f"{n} required stops exceed the planner limit of {MAX_REQUIRED_STOPS}")
+            changed.append(r["id"])
+    return changed
+
+
+def fix_d2_stop_limit(out_dir: str = DATASETS_DIR) -> dict:
+    path = Path(out_dir) / "d2_end_to_end.jsonl"
+    recs = read_jsonl(path)
+    ids = relabel_too_many_stops(recs)
+    write_jsonl(path, recs)
+    return {"relabelled_to_handoff": ids, "by_outcome": dict(Counter(r["expected_outcome"] for r in recs))}
+
+
+def refresh_gold_constraints(out_dir: str = DATASETS_DIR) -> dict:
+    """Rebuild every record's gold_constraints (the evaluator view) from its internal gold_constraint_set."""
+    path = Path(out_dir) / "d2_end_to_end.jsonl"
+    recs = read_jsonl(path)
+    changed = 0
+    for r in recs:
+        new = repo_gold_constraints(r.get("gold_constraint_set"))
+        if new != r.get("gold_constraints"):
+            r["gold_constraints"] = new
+            changed += 1
+    write_jsonl(path, recs)
+    return {"gold_constraints_updated": changed, "n": len(recs)}
 
 
 def finalize_d2(rec: dict) -> dict:
@@ -433,7 +484,7 @@ def build_d2(seed: int = 42, offline: bool = True, out_dir: str = DATASETS_DIR, 
             city = rng.choices(list(spec.CITIES), weights=list(spec.CITIES.values()))[0]
             cs, coords, extra, why = _handoff(reason, rng, b, city)
             row = spec.USE_CASE_BY_ID[{"too_many_stops": 24, "infeasible_deadline": 25, "unverifiable_guarantee": 26,
-                                       "contradictory_request": 29, "unfamiliar_terrain_hike": 4}[reason]]
+                                       "contradictory_request": 29}[reason]]
             recs.append({**common(len(recs), row, "handoff", city), "expected_route_action": "escalate", "refusal_reason": "none",
                          "handoff_reason": reason, "handoff_explanation": why, "gold_constraint_set": cs,
                          "gold_coordinates": coords, "brief": _brief(cs, extra), **extra})
@@ -477,6 +528,8 @@ def build_d2(seed: int = 42, offline: bool = True, out_dir: str = DATASETS_DIR, 
     write_jsonl(Path(out_dir) / "d2_end_to_end.jsonl", recs)
     write_jsonl(Path(out_dir) / "d2_rejected.jsonl", rejected)
     _write_d2_sheets(recs, review_dir)
+    sync_d2_loops(recs)
+    relabel_too_many_stops(recs)
     counts = Counter(r["expected_outcome"] for r in recs)
     summary = {"n": len(recs), "by_outcome": dict(counts), "handwritten_todo": sum(r["source"] == "handwritten_todo" for r in recs),
                "rejected_by_reason": dict(Counter(x for r in rejected for x in r["reasons"])),
@@ -553,8 +606,73 @@ def apply_d2_coords(csv_path: str, out_dir: str = DATASETS_DIR) -> dict:
             continue
         target.update(lat=float(lat), lon=float(lon), verified=True, verified_by=(row.get("verified_by") or "").strip())
         done += 1
+    loops = sync_d2_loops(list(recs.values()))      # loop destinations take their origin's (verified) point
     write_jsonl(path, list(recs.values()))
-    return {"applied": done, "left_unverified": skipped, "not_found": missing}
+    return {"applied": done, "left_unverified": skipped, "not_found": missing, **loops}
+
+
+def sync_d2_loops(recs: List[dict]) -> dict:
+    """Keep loop trips consistent. (a) A loop ends where it starts, so its destination point is the origin point
+    (copied, with its verified flag). (b) A loop whose origin was removed for a clarify question also loses the
+    destination, in the gold ConstraintSet and in the coordinates, because the user's message names neither."""
+    copied, cleared = [], []
+    for r in recs:
+        cs = r.get("gold_constraint_set")
+        if not cs or not cs.get("loop"):
+            continue
+        co = r.setdefault("gold_coordinates", {}) or {}
+        if cs.get("origin") and co.get("origin"):
+            dest = dict(co["origin"])
+            dest["role"] = "destination"
+            if co.get("destination") != dest:
+                co["destination"] = dest
+                copied.append(r["id"])
+        elif cs.get("missing_field") == "origin" and (cs.get("destination") or "destination" in co):
+            cs["destination"] = None
+            co.pop("destination", None)
+            r["gold_constraints"] = repo_gold_constraints(cs)
+            cleared.append(r["id"])
+    return {"loop_destination_copied": copied, "loop_destination_cleared": cleared}
+
+
+def fix_d2_loops(out_dir: str = DATASETS_DIR) -> dict:
+    path = Path(out_dir) / "d2_end_to_end.jsonl"
+    recs = read_jsonl(path)
+    out = sync_d2_loops(recs)
+    write_jsonl(path, recs)
+    return out
+
+
+def lf_sha256(path) -> str:
+    """sha256 over the file with CRLF turned into LF, so Windows and Mac checkouts give the same value."""
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def build_manifest(out_dir: str = DATASETS_DIR, seed: int = 42) -> dict:
+    """Rebuild eval/datasets/manifest.json from the FINAL files (counts and LF hashes), replacing any older one."""
+    d2 = read_jsonl(Path(out_dir) / "d2_end_to_end.jsonl")
+    d3 = read_jsonl(Path(out_dir) / "d3_adversarial.jsonl")
+    d4 = json.loads(Path(SPONSOR_PATH).read_text(encoding="utf-8"))
+    d4_rows = d4 if isinstance(d4, list) else d4.get("sponsors", d4.get("businesses", []))
+    pts = [c for r in d2 for c in [*(v for k, v in (r.get("gold_coordinates") or {}).items() if k != "stops" and v),
+                                   *((r.get("gold_coordinates") or {}).get("stops") or [])]]
+    man = {
+        "d2": {"n": len(d2), "by_outcome": dict(Counter(r["expected_outcome"] for r in d2)),
+               "by_source": dict(Counter(r["source"] for r in d2)),
+               "handwritten_pending": sum(r["source"] == "handwritten_todo" for r in d2),
+               "coordinate_points": len(pts), "coordinate_points_verified": sum(bool(c.get("verified")) for c in pts)},
+        "d3": {"n": len(d3), "by_family": dict(Counter(r["family"] for r in d3)),
+               "human_reviewed": sum(bool(r.get("human_reviewed")) for r in d3), "two_turn": sum(bool(r.get("two_turn")) for r in d3)},
+        "d4": {"n": len(d4_rows)},
+        "seed": seed,
+        "sha256_lf": {f: lf_sha256(f) for f in (f"{out_dir}/d2_end_to_end.jsonl", f"{out_dir}/d3_adversarial.jsonl", SPONSOR_PATH)
+                      if Path(f).exists()},
+        "sha256_note": "hash of the file bytes with CRLF replaced by LF",
+    }
+    with open(f"{out_dir}/manifest.json", "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(man, indent=2, sort_keys=True) + "\n")
+    return man
 
 
 # ----------------------------------------------------------------------------
@@ -1005,7 +1123,7 @@ def _is_utf8(b: bytes) -> bool:
 # ----------------------------------------------------------------------------
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="python -m data_gen.datasets", description="Build D2-D5")
-    p.add_argument("what", choices=["d2", "d3", "d4", "d5", "all", "import-d2-handwritten", "apply-d3-review", "apply-d2-coords"])
+    p.add_argument("what", choices=["d2", "d3", "d4", "d5", "all", "import-d2-handwritten", "apply-d3-review", "apply-d2-coords", "fix-d2-loops", "align-d2-gold", "fix-d2-stop-limit", "manifest"])
     p.add_argument("--offline", action="store_true")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--csv", help="import-d2-handwritten: the filled d2_handwrite_TODO.csv; apply-d3-review: the reviewed d3 sheet")
@@ -1022,13 +1140,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(k.upper(), v)
     if summ:
         import hashlib
-        files = {f: hashlib.sha256(Path(f).read_bytes()).hexdigest() for f in
+        files = {f: lf_sha256(f) for f in
                  (f"{DATASETS_DIR}/d2_end_to_end.jsonl", f"{DATASETS_DIR}/d3_adversarial.jsonl", SPONSOR_PATH) if Path(f).exists()}
         old = json.loads(Path(f"{DATASETS_DIR}/manifest.json").read_text()) if Path(f"{DATASETS_DIR}/manifest.json").exists() else {}
         Path(f"{DATASETS_DIR}/manifest.json").write_text(json.dumps({**old, **summ, "sha256": {**old.get("sha256", {}), **files},
                                                                       "seed": a.seed}, indent=2, sort_keys=True))
     if a.what == "d5":
         print("D5", prepare_d5(a.replies))
+    if a.what == "fix-d2-stop-limit":
+        print("D2 stop limit", fix_d2_stop_limit())
+    if a.what == "align-d2-gold":
+        print("D2 gold", refresh_gold_constraints())
+    if a.what == "fix-d2-loops":
+        print("D2 loops", fix_d2_loops())
+    if a.what == "manifest":
+        print("manifest", json.dumps(build_manifest(seed=a.seed), indent=1)[:2000])
     if a.what == "apply-d2-coords":
         print("D2 coords", apply_d2_coords(a.csv))
     if a.what == "apply-d3-review":

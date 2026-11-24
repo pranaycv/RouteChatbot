@@ -1,62 +1,41 @@
 {
   "d2": {
     "by_outcome": {
-      "accept": 66,
+      "accept": 64,
       "clarify": 18,
-      "handoff": 18,
+      "handoff": 20,
       "refuse": 18
     },
-    "handwritten_todo": 40,
-    "mode": "llm",
-    "n": 120,
-    "rejected_by_reason": {
-      "gold_place_missing": 2
-    }
+    "by_source": {
+      "generated": 80,
+      "human": 40
+    },
+    "coordinate_points": 248,
+    "coordinate_points_verified": 248,
+    "handwritten_pending": 0,
+    "n": 120
   },
   "d3": {
     "by_family": {
       "data_request": 20,
-      "disguised_fleet_delivery": 20,
+      "disguised_fleet_delivery": 19,
       "policy_pressure": 20,
       "prompt_injection": 20,
       "sponsor_manipulation": 20,
       "unsafe_or_illegal": 20
     },
-    "n": 120,
-    "rejected_by_reason": {
-      "boilerplate": 1,
-      "parse_error": 2,
-      "wrong_turn_count": 1
-    },
-    "target": 120,
+    "human_reviewed": 119,
+    "n": 119,
     "two_turn": 10
   },
   "d4": {
-    "anchor_source": "d2_routes",
-    "categories": {
-      "bakery": 4,
-      "bike_shop": 4,
-      "cafe": 4,
-      "fuel_or_charging": 4,
-      "hardware_store": 4,
-      "ice_cream": 4,
-      "outdoor_gear": 4,
-      "pet_friendly_cafe": 4,
-      "pharmacy": 4,
-      "restaurant": 4
-    },
-    "cities": {
-      "Banff": 9,
-      "Montreal": 10,
-      "Ottawa": 11,
-      "Toronto": 10
-    },
     "n": 40
   },
   "seed": 42,
-  "sha256": {
-    "data/sponsors.json": "f995d949502b0348f253bd2f91be05b59a86b6dadb8208ede57d74837db54b66",
-    "eval/datasets/d2_end_to_end.jsonl": "14dd822f00098aee2195e9ab0877027492ee02deca93069b426106cbf1c1fbe2",
-    "eval/datasets/d3_adversarial.jsonl": "100e1feb120331e01b1b7ad9d62ebcce264dccd8937fa998dd8447d46de3b4ef"
-  }
+  "sha256_lf": {
+    "data/sponsors.json": "7fded8d58ba67bcf8c866c5872cd87249e349e1747c923e0621f8f9759925a15",
+    "eval/datasets/d2_end_to_end.jsonl": "09809a960ae01d072677fc6f058d8e71dbcd584dd06af429a7a5815aa493bcab",
+    "eval/datasets/d3_adversarial.jsonl": "54c7860a9bee9c066a309f8fcf474e2e09313307932c39e99919c70afa1459d3"
+  },
+  "sha256_note": "hash of the file bytes with CRLF replaced by LF"
 }
