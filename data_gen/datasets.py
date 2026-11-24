@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import math
 import random
@@ -343,10 +344,18 @@ def _strip_place_names(text: str) -> str:
     return text
 
 
+# Stop type words used by the extractor (docs/constraintset_semantics_v1.md): a generic stop has query == category ==
+# the type word; a named place has category null; a charging stop is "ev_charging_station" (no fuel_or_charging).
+STOP_TYPE_WORD = {"cafe": "coffee", "restaurant": "lunch", "pharmacy": "pharmacy", "bank": "bank", "grocery": "grocery",
+                  "playground": "playground", "viewpoint": "viewpoint", "fuel_or_charging": "ev_charging_station"}
+
+
 def repo_gold_constraints(cs: Optional[dict]) -> Optional[dict]:
-    """Internal gold (rich, used for QC) -> frozen v1 ConstraintSet. Differences handled here:
-    required_accessibility is a bool; missing_field only allows origin/destination/unparseable
-    (a missing STOP is signalled by the classifier's clarify_field, not by the extractor); mode is never null."""
+    """Internal gold (rich, used for QC) -> the extractor's ConstraintSet, as in docs/constraintset_semantics_v1.md.
+    Differences handled here: required_accessibility is a bool; missing_field only allows origin/destination/unparseable
+    (a missing STOP is signalled by the classifier's clarify_field, not by the extractor); mode is never null;
+    a loop has destination null (origin only); named stops have category null; generic stops use the type word
+    for both query and category; a charging stop is ev_charging_station."""
     if cs is None:
         return None
     out = dict(cs)
@@ -355,7 +364,63 @@ def repo_gold_constraints(cs: Optional[dict]) -> Optional[dict]:
         out["missing_field"] = None
     out["mode"] = out.get("mode") or "unspecified"
     out["modes_to_compare"] = [m for m in out.get("modes_to_compare") or []]
+    if out.get("loop"):
+        out["destination"] = None
+    stops = []
+    for st in out.get("stops") or []:
+        st = dict(st)
+        if st.get("category") == "named_place":
+            st["category"] = None
+        elif st.get("category") in STOP_TYPE_WORD:
+            st["category"] = st["query"] = STOP_TYPE_WORD[st["category"]]
+        stops.append(st)
+    out["stops"] = stops
     return contracts.validate_constraints(out) if contracts.available() else out
+
+
+MAX_REQUIRED_STOPS = 3      # config.yaml trip.max_required_stops; more than this is a too-many-stops handoff
+
+
+def relabel_too_many_stops(recs: List[dict]) -> List[str]:
+    """A record with more than MAX_REQUIRED_STOPS required stops is a handoff (reason too_many_stops), whatever it was
+    generated as. The ConstraintSet flag is set by code from the same rule. Idempotent; returns the ids it changed."""
+    changed = []
+    for r in recs:
+        cs = r.get("gold_constraint_set")
+        if not cs:
+            continue
+        n = sum(1 for st in cs.get("stops") or [] if st.get("required", True))
+        if n > MAX_REQUIRED_STOPS and not cs.get("too_many_stops"):
+            cs["too_many_stops"] = True
+            r["gold_constraints"] = repo_gold_constraints(cs)
+            if r["expected_outcome"] != "handoff":
+                r.update(expected_outcome="handoff", expected_route_action="escalate", refusal_reason="none",
+                         handoff_reason="too_many_stops",
+                         handoff_explanation=f"{n} required stops exceed the planner limit of {MAX_REQUIRED_STOPS}")
+            changed.append(r["id"])
+    return changed
+
+
+def fix_d2_stop_limit(out_dir: str = DATASETS_DIR) -> dict:
+    path = Path(out_dir) / "d2_end_to_end.jsonl"
+    recs = read_jsonl(path)
+    ids = relabel_too_many_stops(recs)
+    write_jsonl(path, recs)
+    return {"relabelled_to_handoff": ids, "by_outcome": dict(Counter(r["expected_outcome"] for r in recs))}
+
+
+def refresh_gold_constraints(out_dir: str = DATASETS_DIR) -> dict:
+    """Rebuild every record's gold_constraints (the evaluator view) from its internal gold_constraint_set."""
+    path = Path(out_dir) / "d2_end_to_end.jsonl"
+    recs = read_jsonl(path)
+    changed = 0
+    for r in recs:
+        new = repo_gold_constraints(r.get("gold_constraint_set"))
+        if new != r.get("gold_constraints"):
+            r["gold_constraints"] = new
+            changed += 1
+    write_jsonl(path, recs)
+    return {"gold_constraints_updated": changed, "n": len(recs)}
 
 
 def finalize_d2(rec: dict) -> dict:
@@ -463,6 +528,8 @@ def build_d2(seed: int = 42, offline: bool = True, out_dir: str = DATASETS_DIR, 
     write_jsonl(Path(out_dir) / "d2_end_to_end.jsonl", recs)
     write_jsonl(Path(out_dir) / "d2_rejected.jsonl", rejected)
     _write_d2_sheets(recs, review_dir)
+    sync_d2_loops(recs)
+    relabel_too_many_stops(recs)
     counts = Counter(r["expected_outcome"] for r in recs)
     summary = {"n": len(recs), "by_outcome": dict(counts), "handwritten_todo": sum(r["source"] == "handwritten_todo" for r in recs),
                "rejected_by_reason": dict(Counter(x for r in rejected for x in r["reasons"])),
@@ -492,17 +559,120 @@ def _write_d2_sheets(recs: List[dict], review_dir: str) -> None:
                 w.writerow([r["id"], c["role"], c["name"], c["lat"], c["lon"], "", "", ""])
 
 
+
+def read_csv_text(path: str) -> str:
+    """Decode a reviewer's CSV: UTF-8 if it is, else per line UTF-8 / Windows-1252 (an Excel 'CSV' save)."""
+    raw = Path(path).read_bytes()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return "\n".join(l.decode("utf-8") if _is_utf8(l) else l.decode("cp1252", errors="replace") for l in raw.splitlines())
+
+
 def import_d2_handwritten(csv_path: str, out_dir: str = DATASETS_DIR) -> int:
     path = Path(out_dir) / "d2_end_to_end.jsonl"
     recs = {r["id"]: r for r in read_jsonl(path)}
     n = 0
-    for row in csv.DictReader(open(csv_path, newline="", encoding="utf-8-sig")):
+    for row in csv.DictReader(io.StringIO(read_csv_text(csv_path))):
         msg = row["message"].strip()
         if msg and row["id"] in recs:
             recs[row["id"]].update(message=msg, source="human", utterance=msg)
             n += 1
     write_jsonl(path, list(recs.values()))
     return n
+
+
+def apply_d2_coords(csv_path: str, out_dir: str = DATASETS_DIR) -> dict:
+    """Copy human-verified coordinates into each record's gold_coordinates. A row with blank verified_lat/lon
+    keeps the generated value (and stays marked unverified). Rows are matched on (d2_id, role)."""
+    path = Path(out_dir) / "d2_end_to_end.jsonl"
+    recs = {r["id"]: r for r in read_jsonl(path)}
+    done = skipped = 0
+    missing = []
+    for row in csv.DictReader(io.StringIO(read_csv_text(csv_path))):
+        rec = recs.get(row["d2_id"].strip())
+        lat, lon = (row.get("verified_lat") or "").strip(), (row.get("verified_lon") or "").strip()
+        if rec is None:
+            missing.append(row["d2_id"])
+            continue
+        if not (lat and lon):
+            skipped += 1
+            continue
+        co = rec.get("gold_coordinates") or {}
+        role = row["role"].strip()
+        target = co.get(role) if role in ("origin", "destination") else next((c for c in co.get("stops", []) if c.get("role") == role), None)
+        if target is None:
+            missing.append(f"{row['d2_id']}/{role}")
+            continue
+        target.update(lat=float(lat), lon=float(lon), verified=True, verified_by=(row.get("verified_by") or "").strip())
+        done += 1
+    loops = sync_d2_loops(list(recs.values()))      # loop destinations take their origin's (verified) point
+    write_jsonl(path, list(recs.values()))
+    return {"applied": done, "left_unverified": skipped, "not_found": missing, **loops}
+
+
+def sync_d2_loops(recs: List[dict]) -> dict:
+    """Keep loop trips consistent. (a) A loop ends where it starts, so its destination point is the origin point
+    (copied, with its verified flag). (b) A loop whose origin was removed for a clarify question also loses the
+    destination, in the gold ConstraintSet and in the coordinates, because the user's message names neither."""
+    copied, cleared = [], []
+    for r in recs:
+        cs = r.get("gold_constraint_set")
+        if not cs or not cs.get("loop"):
+            continue
+        co = r.setdefault("gold_coordinates", {}) or {}
+        if cs.get("origin") and co.get("origin"):
+            dest = dict(co["origin"])
+            dest["role"] = "destination"
+            if co.get("destination") != dest:
+                co["destination"] = dest
+                copied.append(r["id"])
+        elif cs.get("missing_field") == "origin" and (cs.get("destination") or "destination" in co):
+            cs["destination"] = None
+            co.pop("destination", None)
+            r["gold_constraints"] = repo_gold_constraints(cs)
+            cleared.append(r["id"])
+    return {"loop_destination_copied": copied, "loop_destination_cleared": cleared}
+
+
+def fix_d2_loops(out_dir: str = DATASETS_DIR) -> dict:
+    path = Path(out_dir) / "d2_end_to_end.jsonl"
+    recs = read_jsonl(path)
+    out = sync_d2_loops(recs)
+    write_jsonl(path, recs)
+    return out
+
+
+def lf_sha256(path) -> str:
+    """sha256 over the file with CRLF turned into LF, so Windows and Mac checkouts give the same value."""
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def build_manifest(out_dir: str = DATASETS_DIR, seed: int = 42) -> dict:
+    """Rebuild eval/datasets/manifest.json from the FINAL files (counts and LF hashes), replacing any older one."""
+    d2 = read_jsonl(Path(out_dir) / "d2_end_to_end.jsonl")
+    d3 = read_jsonl(Path(out_dir) / "d3_adversarial.jsonl")
+    d4 = json.loads(Path(SPONSOR_PATH).read_text(encoding="utf-8"))
+    d4_rows = d4 if isinstance(d4, list) else d4.get("sponsors", d4.get("businesses", []))
+    pts = [c for r in d2 for c in [*(v for k, v in (r.get("gold_coordinates") or {}).items() if k != "stops" and v),
+                                   *((r.get("gold_coordinates") or {}).get("stops") or [])]]
+    man = {
+        "d2": {"n": len(d2), "by_outcome": dict(Counter(r["expected_outcome"] for r in d2)),
+               "by_source": dict(Counter(r["source"] for r in d2)),
+               "handwritten_pending": sum(r["source"] == "handwritten_todo" for r in d2),
+               "coordinate_points": len(pts), "coordinate_points_verified": sum(bool(c.get("verified")) for c in pts)},
+        "d3": {"n": len(d3), "by_family": dict(Counter(r["family"] for r in d3)),
+               "human_reviewed": sum(bool(r.get("human_reviewed")) for r in d3), "two_turn": sum(bool(r.get("two_turn")) for r in d3)},
+        "d4": {"n": len(d4_rows)},
+        "seed": seed,
+        "sha256_lf": {f: lf_sha256(f) for f in (f"{out_dir}/d2_end_to_end.jsonl", f"{out_dir}/d3_adversarial.jsonl", SPONSOR_PATH)
+                      if Path(f).exists()},
+        "sha256_note": "hash of the file bytes with CRLF replaced by LF",
+    }
+    with open(f"{out_dir}/manifest.json", "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(man, indent=2, sort_keys=True) + "\n")
+    return man
 
 
 # ----------------------------------------------------------------------------
@@ -888,15 +1058,75 @@ def prepare_d5(replies_jsonl: str, out_csv: str = f"{REVIEW_DIR}/d5_judge_calibr
     return {"n": len(pick), "strata": {k: min(per, len(v)) for k, v in by.items()}}
 
 
+
+# ----------------------------------------------------------------------------
+# D3 human review: apply keep / fix / reject decisions from the reviewed sheet
+# ----------------------------------------------------------------------------
+def apply_d3_review(csv_path: str, out_dir: str = DATASETS_DIR) -> dict:
+    """keep = unchanged; fix = replace the turns with `edited_turns` (same number of turns, ' ||| ' between
+    turns); reject = move to d3_rejected.jsonl. Rows are matched by id. For `keep`, a filled edited_turns cell
+    is ignored and reported (usually a paste into the wrong row). The pre-review file is saved once."""
+    text = read_csv_text(csv_path)
+    decisions = {r["id"].strip(): r for r in csv.DictReader(io.StringIO(text))}
+    path = Path(out_dir) / "d3_adversarial.jsonl"
+    backup = Path(out_dir) / "d3_adversarial_prereview.jsonl"
+    if not backup.exists():
+        backup.write_bytes(path.read_bytes())
+    recs = read_jsonl(str(backup))
+    ids = {r["id"] for r in recs}
+    missing = sorted(ids - set(decisions))
+    unknown = sorted(set(decisions) - ids)
+    kept, rejected_new, fixed, ignored_edits = [], [], [], []
+    for r in recs:
+        d = decisions.get(r["id"])
+        dec = ((d or {}).get("decision") or "").strip().lower()
+        edited = ((d or {}).get("edited_turns") or "").strip()
+        if dec == "reject":
+            rejected_new.append({"id": r["id"], "reasons": ["human_reject"], "text": " ||| ".join(r["turns"]),
+                                 "notes": (d.get("notes") or "").strip()})
+            continue
+        if dec == "fix":
+            turns = [t.strip() for t in edited.split("|||")]
+            if not edited or len(turns) != len(r["turns"]):
+                raise ValueError(f"{r['id']}: fix needs edited_turns with {len(r['turns'])} turn(s)")
+            r["turns_original"], r["turns"] = r["turns"], turns
+            finalize_d3(r)
+            fixed.append(r["id"])
+        elif dec == "keep":
+            if edited:
+                ignored_edits.append(r["id"])
+        elif dec:
+            raise ValueError(f"{r['id']}: unknown decision {dec!r}")
+        else:
+            continue                      # undecided rows stay out until reviewed
+        r["human_reviewed"] = True
+        kept.append(r)
+    write_jsonl(path, kept)
+    old_rej = read_jsonl(str(Path(out_dir) / "d3_rejected.jsonl")) if (Path(out_dir) / "d3_rejected.jsonl").exists() else []
+    old_rej = [x for x in old_rej if "human_reject" not in x.get("reasons", [])]
+    write_jsonl(Path(out_dir) / "d3_rejected.jsonl", old_rej + rejected_new)
+    return {"kept": len(kept), "fixed": fixed, "rejected": [x["id"] for x in rejected_new], "undecided": len(recs) - len(kept) - len(rejected_new),
+            "edited_turns_ignored_on_keep": ignored_edits, "not_in_csv": missing, "csv_ids_not_in_data": unknown,
+            "by_family": dict(Counter(r["family"] for r in kept))}
+
+
+def _is_utf8(b: bytes) -> bool:
+    try:
+        b.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
 # ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="python -m data_gen.datasets", description="Build D2-D5")
-    p.add_argument("what", choices=["d2", "d3", "d4", "d5", "all", "import-d2-handwritten"])
+    p.add_argument("what", choices=["d2", "d3", "d4", "d5", "all", "import-d2-handwritten", "apply-d3-review", "apply-d2-coords", "fix-d2-loops", "align-d2-gold", "fix-d2-stop-limit", "manifest"])
     p.add_argument("--offline", action="store_true")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--csv", help="import-d2-handwritten: the filled d2_handwrite_TODO.csv")
+    p.add_argument("--csv", help="import-d2-handwritten: the filled d2_handwrite_TODO.csv; apply-d3-review: the reviewed d3 sheet")
     p.add_argument("--replies", help="d5: JSONL of system replies (id, request, reply, expected_outcome)")
     a = p.parse_args(argv)
     summ: Dict[str, Any] = {}
@@ -910,13 +1140,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(k.upper(), v)
     if summ:
         import hashlib
-        files = {f: hashlib.sha256(Path(f).read_bytes()).hexdigest() for f in
+        files = {f: lf_sha256(f) for f in
                  (f"{DATASETS_DIR}/d2_end_to_end.jsonl", f"{DATASETS_DIR}/d3_adversarial.jsonl", SPONSOR_PATH) if Path(f).exists()}
         old = json.loads(Path(f"{DATASETS_DIR}/manifest.json").read_text()) if Path(f"{DATASETS_DIR}/manifest.json").exists() else {}
         Path(f"{DATASETS_DIR}/manifest.json").write_text(json.dumps({**old, **summ, "sha256": {**old.get("sha256", {}), **files},
                                                                       "seed": a.seed}, indent=2, sort_keys=True))
     if a.what == "d5":
         print("D5", prepare_d5(a.replies))
+    if a.what == "fix-d2-stop-limit":
+        print("D2 stop limit", fix_d2_stop_limit())
+    if a.what == "align-d2-gold":
+        print("D2 gold", refresh_gold_constraints())
+    if a.what == "fix-d2-loops":
+        print("D2 loops", fix_d2_loops())
+    if a.what == "manifest":
+        print("manifest", json.dumps(build_manifest(seed=a.seed), indent=1)[:2000])
+    if a.what == "apply-d2-coords":
+        print("D2 coords", apply_d2_coords(a.csv))
+    if a.what == "apply-d3-review":
+        print("D3 review", apply_d3_review(a.csv))
     if a.what == "import-d2-handwritten":
         print("imported", import_d2_handwritten(a.csv))
     return 0
