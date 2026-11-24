@@ -161,6 +161,16 @@ def test_satellite_style_is_esri_with_its_credit(tmp_path, monkeypatch):
     assert "Esri" in imagery["attribution"]
 
 
+def test_the_top_bar_credits_the_team_in_order(monkeypatch):
+    monkeypatch.setenv("STUBS", "1")
+    app = AppTest.from_file(str(_APP), default_timeout=30)
+    app.run()
+    credit = next(block.value for block in app.markdown if "class='rc-team'" in block.value)
+    names = ["Tara Cotter", "Preeti Shehrawat", "Rishi Sharma", "Ran Liu", "Pranay Soni"]
+    places = [credit.index(name) for name in ["Team Rosedale : MMAI 2027", *names]]
+    assert places == sorted(places)
+
+
 def test_a_long_trip_is_zoomed_out_further_on_a_phone(monkeypatch):
     """A phone map is narrower, so the same wide trip needs a smaller zoom. A short trip is left alone."""
     from routechat import app as app_module
