@@ -209,7 +209,7 @@ def test_graph_can_find_classify_node_and_classify():
 def test_build_messages_uses_label_guide_and_fewshot():
     with_examples = build_messages(RUNNING, include_examples=True)
     without = build_messages(RUNNING, include_examples=False)
-    assert with_examples[0]["role"] == "system" and "Label guide v2" in with_examples[0]["content"]
+    assert with_examples[0]["role"] == "system" and "Label guide v3" in with_examples[0]["content"]
     assert "out_of_scope_mode" in with_examples[0]["content"]
     assert len(with_examples) == 2 + 2 * 8 and len(without) == 2
     assert with_examples[-1]["content"] == RUNNING.model_dump_json()
@@ -238,4 +238,4 @@ def test_log_line_matches_wp10_schema(caplog):
     classify(RUNNING, backend=ScriptedBackend([_labels()]), request_id="r_log")
     line = json.loads([r.message for r in caplog.records if r.name == "routechat.classify"][-1])
     assert validate_line(line) == []
-    assert line["stage"] == "classify" and line["prompt_version"] == "label_guide_v2"
+    assert line["stage"] == "classify" and line["prompt_version"] == "label_guide_v3"

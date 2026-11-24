@@ -41,7 +41,7 @@ from routechat.schemas import ConstraintSet, RouteClassification, UserTurn
 # replan for any blocked-or-alternative request, lookup_only for any fact question, replan before clarify).
 # CLASSIFIER_PROMPT_VERSION overrides the default; a fine-tuned adapter pins the version it was trained with
 # (prompt_version.txt next to its weights), so training and serving never drift.
-DEFAULT_PROMPT_VERSION = "label_guide_v2"
+DEFAULT_PROMPT_VERSION = "label_guide_v3"
 PROMPT_VERSION = DEFAULT_PROMPT_VERSION  # the module constant some callers read; prompt_version() is authoritative
 
 
