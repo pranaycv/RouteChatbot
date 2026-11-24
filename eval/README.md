@@ -24,7 +24,7 @@ This branch only adds new files. It does not change any file owned by another pa
 ```bash
 FIXTURES=replay uv run pytest                     # all tests, WP0's and these
 FIXTURES=replay uv run python -m eval.run_eval --all
-uv run python -m eval.cost_model --logs logs/<run_id>.jsonl --success eval/results/end_to_end.csv
+uv run python -m eval.cost_model --logs logs/<run_id>_D2.jsonl --success eval/results/end_to_end.csv
 RUN_JUDGE=1 uv run python -m eval.run_eval --e2e   # D2 run with the LLM judge (needs an API key)
 uv run python -m eval.judge --agreement report/judge_grading_A.csv report/judge_grading_B.csv
 uv run python -m eval.judge --agreement report/judge_grading_A.csv   # one grader only
@@ -48,10 +48,12 @@ bash eval/final_run.sh                             # the final run, once every s
 - **A reply the judge didn't grade is not clean.** It counts against trip success, so a judge failure can't make results look better.
 - **One grader is enough to run the judge check.** With a second grader we also report person vs
   person; with one, that column is NaN and the report says the judge was checked against one person.
-- **Hike and transit follow P-09.** Transit is refused by the classifier (`out_of_scope_mode`, in the
-  schema since Nov 23), so D1 and D2 score it as a refuse. When the gold mode is hike and the map tools
-  stop it with "not covered yet", the outcome counts as right. The results keep a `not_covered_p09` column so these
-  are reported on their own.
+- **Hike, transit and combined modes follow P-09.** Transit is refused by the classifier
+  (`out_of_scope_mode`). Hike and combined modes are refused by the verifier without a ticket, and a
+  missing mode becomes clarify (PR #18). When the gold mode is hike, transit or multimodal and the system
+  says it is not covered yet, the outcome counts as right; `not_covered_p09` keeps these visible.
+- **A new RUN_ID for every run.** WP7's logger appends, so if a log file for that RUN_ID already exists
+  `run_eval` moves it aside first; otherwise its cost would be counted twice.
 - **Only inspected routes use a person's answer.** Trip success uses the reviewer's answer for the 50
   inspected routes; other accepted routes keep the verifier's statuses and are marked `verifier_only`.
 - **An API with no price is never free.** If the log has an API name that `cost_assumptions.yaml` does
@@ -72,7 +74,7 @@ bash eval/final_run.sh                             # the final run, once every s
   Kaggle's free GPU (WP9). Classifier hosting assumes CPU [WP9 to confirm].
 
 - The run log comes from WP7's logger (`routechat/logging.py`, merged Nov 23). `run_eval` points it at
-  `logs/<run_id>.jsonl` with `ROUTECHAT_LOG`, so each evaluation run has its own file; the classifier step
+  `logs/<run_id>_<dataset>.jsonl` (D2, D3) with `ROUTECHAT_LOG`, so each run and dataset has its own file; the classifier step
   writes one file per backend. The runner no longer writes log lines itself.
 
 ## Checked on Nov 22 against the other branches

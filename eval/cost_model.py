@@ -5,7 +5,7 @@
 """WP11 cost model (Part C of the work packages).
 
 Where each number comes from:
-  - usage per request (model cost, API calls)  -> the run logs (logs/<run_id>.jsonl)
+  - usage per request (model cost, API calls)  -> the run logs (logs/<run_id>_D2.jsonl)
   - unit prices                                -> config.yaml `prices:` (WP0), read through routechat.config
   - business assumptions (volumes, exchange    -> eval/cost_assumptions.yaml (this package)
     rate, fixed and error costs, revenue)
@@ -14,7 +14,7 @@ config.yaml is not edited: its Settings model forbids unknown keys, so WP11's as
 own file, and that file holds no prices. A value left null shows up as NaN in the output and in `missing_inputs`, so an unfinished
 assumption can never quietly become zero.
 
-    uv run python -m eval.cost_model --logs logs/<run_id>.jsonl --success eval/results/end_to_end.csv
+    uv run python -m eval.cost_model --logs logs/<run_id>_D2.jsonl --success eval/results/end_to_end.csv
 """
 from __future__ import annotations
 

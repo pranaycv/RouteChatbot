@@ -53,8 +53,19 @@ def save(df: pd.DataFrame, name: str, run_id: str):
     print(f"wrote {RESULTS / name} ({len(df)} rows)")
 
 
+def fresh_log(path: Path) -> Path:
+    """WP7's logger appends. Reusing a RUN_ID would add a second run's lines to the same file and
+    count its cost twice, so an existing file is moved aside first and the run starts clean."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        old = path.with_name(f"{path.stem}.{time.strftime('%Y%m%d_%H%M%S')}.old{path.suffix}")
+        path.rename(old)
+        print(f"WARNING: {path} already existed (same RUN_ID?), moved to {old}. Use a new RUN_ID for every run.")
+    return path
+
+
 def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, list[dict]]:
-    """Send each record through the real graph; WP7's logger writes logs/<run_id>.jsonl.
+    """Send each record through the real graph; WP7's logger writes logs/<run_id>_<dataset>.jsonl.
 
     Returns the log path and, per item, the predicted ConstraintSet. The ConstraintSet is kept out of
     the app log on purpose (the origin can be a street address); it is saved only in the evaluation
@@ -66,8 +77,8 @@ def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, lis
     """
     from routechat.graph import invoke  # WP0
     os.environ["RUN_ID"] = run_id; os.environ["EVAL_DATASET"] = dataset
-    log_path = Path("logs") / f"{run_id}.jsonl"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # One file per dataset, so --all (D2 then D3 under one RUN_ID) keeps both logs.
+    log_path = fresh_log(Path("logs") / f"{run_id}_{dataset}.jsonl")
     # WP7's logger (routechat/logging.py) writes the stage lines and one request line per request.
     # Pointing ROUTECHAT_LOG at this run's file keeps each evaluation run in its own log.
     os.environ["ROUTECHAT_LOG"] = str(log_path)
@@ -150,7 +161,7 @@ def step_classifier(run_id: str):
     # Backend names follow .env.example (WP0): ft, base, prompted_small, prompted_large.
     for backend in os.environ.get("CLASSIFIER_BACKENDS", "ft,base,prompted_small,prompted_large").split(","):
         os.environ["CLASSIFIER_BACKEND"] = backend
-        log = Path("logs") / f"{run_id}_classifier_{backend}.jsonl"   # one file per backend, for its own cost
+        log = fresh_log(Path("logs") / f"{run_id}_classifier_{backend}.jsonl")   # one file per backend, for its own cost
         os.environ["ROUTECHAT_LOG"] = str(log)
         preds = []
         for r in gold.to_dict("records"):
