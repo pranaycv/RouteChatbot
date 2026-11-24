@@ -85,10 +85,10 @@ def _chosen_candidate(state: dict[str, Any]) -> Any | None:
 
 
 def _error_reason(state: dict[str, Any]) -> str | None:
-    """A tool or graph error on a handoff. Accept does not consult this."""
+    """Find the tool or graph error behind a template response."""
     report = state.get("report")
     decision = _field(report, "decision") if report is not None else None
-    if decision not in {None, "handoff"}:
+    if decision not in {None, "handoff", "clarify", "refuse"}:
         return None
     if report is not None:
         reason = _field(report, "handoff_reason")
