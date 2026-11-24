@@ -14,10 +14,12 @@ replay, the screen shows the saved sample trip.
 from __future__ import annotations
 
 import base64
+import logging
 import math
 import os
 import re
 import time
+from contextlib import nullcontext
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -37,7 +39,7 @@ from routechat.graph import invoke, is_new_trip, question_key, resume, wants_dev
 from routechat.logging import append_handoff, mask_for_log, read_handoffs
 from routechat.progress import board_html, doing, done, summary_html
 from routechat.stubs import RUNNING_UTTERANCE
-from routechat import locate
+from routechat import keys, locate
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,10 +55,22 @@ def _configure() -> None:
     if not os.environ.get("STUBS"):
         has_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
         replay = os.environ.get("FIXTURES", "").strip().lower() == "replay"
-        os.environ["STUBS"] = "0" if has_key or replay else "1"
+        os.environ["STUBS"] = "0" if has_key or replay or keys.from_visitors() else "1"
+    # At INFO, httpx logs whole addresses, and a map address holds the key.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     # The fine-tuned classifier is the default backend. Until its adapter is on disk, prompt instead.
     if not os.environ.get("CLASSIFIER_BACKEND") and not adapter_dir().exists():
         os.environ["CLASSIFIER_BACKEND"] = "prompted_small"
+
+
+def _own_keys() -> bool:
+    """True when this server asks each visitor for their keys."""
+    return keys.from_visitors() and os.environ.get("STUBS") != "1"
+
+
+def _sample() -> bool:
+    """True when this visitor gets the saved sample trip instead of the real stages."""
+    return os.environ.get("STUBS") == "1" or (_own_keys() and not st.session_state.get("own_keys"))
 
 
 _ROUTE = [47, 120, 196]
@@ -698,6 +712,9 @@ def _init() -> None:
     st.session_state.setdefault("seen", [])
     st.session_state.setdefault("no_location", False)
     st.session_state.setdefault("composer_epoch", 0)
+    st.session_state.setdefault("tickets", [])
+    st.session_state.setdefault("own_keys", {})
+    st.session_state.setdefault("keys_open", False)
 
 
 def _new_chat() -> None:
@@ -835,7 +852,7 @@ def _answer(utterance: str) -> tuple[str, bool]:
 def _planner_input(state: dict[str, Any], utterance: str) -> tuple[str, str] | None:
     """What the classifier read for this turn, as a label and a text. None when the guard stopped it."""
     guard = state.get("guard")
-    if _field(guard, "decision") != "allow" or os.environ.get("STUBS") == "1":
+    if _field(guard, "decision") != "allow" or _sample():
         return None
     rewritten = state.get("rewrite")
     status = _field(rewritten, "status")
@@ -896,7 +913,7 @@ def _prepare(job: dict[str, Any]) -> None:
         "picked": list(st.session_state.picked),
         "seen": list(st.session_state.seen),
         "revision_count": 0,
-        "locatable": os.environ.get("STUBS") != "1",
+        "locatable": not _sample(),
     }
 
 
@@ -938,10 +955,16 @@ def _work(job: dict[str, Any], refined: Any, board: Any) -> None:
             if shown:
                 refined.markdown(_input_html(shown), unsafe_allow_html=True)
 
-    if "waited" in job:
-        state = resume(job["waited"], job["device"], on_step=on_step)
-    else:
-        state = invoke(job["payload"], on_step=on_step)
+    nodes: dict[str, Any] = {}
+    if _own_keys() and _sample():
+        from routechat.stubs import stub_nodes
+
+        nodes = {"nodes": stub_nodes()}
+    with keys.visitor_keys(st.session_state.get("own_keys") or {}) if _own_keys() else nullcontext():
+        if "waited" in job:
+            state = resume(job["waited"], job["device"], **nodes, on_step=on_step)
+        else:
+            state = invoke(job["payload"], **nodes, on_step=on_step)
     seconds = job.get("seconds", 0.0) + time.perf_counter() - started
     # Nothing below draws, so a click cannot stop it halfway.
     st.session_state.queue = st.session_state.queue[1:]
@@ -1011,6 +1034,7 @@ def _remember(state: dict[str, Any], *, utterance: str, message: str, request: s
         if hasattr(ticket, "model_dump"):
             ticket = ticket.model_dump()
         append_handoff(ticket)
+        st.session_state.tickets = [*st.session_state.tickets, ticket.get("request_id")]
     if _field(report, "decision") == "accept":
         ends = [
             place for place in state.get("places") or []
@@ -1407,8 +1431,16 @@ def _checks(state: dict[str, Any]) -> None:
     )
 
 
-def _support() -> None:
+def _tickets() -> list[dict[str, Any]]:
+    """The support queue. On a server shared by visitors, only the tickets of this visit."""
     tickets = read_handoffs()
+    if not keys.from_visitors():
+        return tickets
+    return [ticket for ticket in tickets if ticket.get("request_id") in st.session_state.tickets]
+
+
+def _support() -> None:
+    tickets = _tickets()
     if not tickets:
         st.markdown(
             "<section class='rc-support'><div class='rc-section'>Support</div>"
@@ -1526,11 +1558,63 @@ def _location() -> None:
         st.rerun()
 
 
+def _close_keys() -> None:
+    st.session_state.keys_open = False
+
+
+@st.dialog("Your keys", on_dismiss=_close_keys)
+def _keys_dialog() -> None:
+    """Take this visitor's keys, check them with each provider, and keep them for this visit."""
+    st.markdown(
+        "RouteChat uses your own accounts, so your usage is charged to you. Your keys stay in this server's "
+        "memory for this visit. They are not saved or logged, and other visitors cannot see them. "
+        "Refreshing the page clears them."
+    )
+    st.markdown(
+        "Get a key from [OpenRouter](https://openrouter.ai/settings/keys) or "
+        "[OpenAI](https://platform.openai.com/api-keys), "
+        "[Mapbox](https://console.mapbox.com/account/access-tokens/) and "
+        "[GraphHopper](https://graphhopper.com/dashboard/). Set a spending limit on the model key."
+    )
+    with st.form("keys_form", border=False):
+        model = st.text_input("OpenRouter or OpenAI key", type="password", autocomplete="off")
+        mapbox = st.text_input("Mapbox token", type="password", autocomplete="off")
+        graphhopper = st.text_input("GraphHopper key", type="password", autocomplete="off")
+        sent = st.form_submit_button("Check and use", type="primary", width="stretch")
+    if sent:
+        model, mapbox, graphhopper = model.strip(), mapbox.strip(), graphhopper.strip()
+        if not (model and mapbox and graphhopper):
+            st.error("All three keys are needed.")
+        else:
+            given = {keys.model_key_name(model): model, "MAPBOX_TOKEN": mapbox, "GRAPHHOPPER_KEY": graphhopper}
+            with st.spinner("Checking your keys"):
+                found = keys.problems(given)
+            if found:
+                st.error("\n\n".join(found))
+            else:
+                _use_keys(given)
+                st.rerun()
+    if st.session_state.own_keys and st.button("Remove my keys", key="remove_keys", width="stretch"):
+        _use_keys({})
+        st.rerun()
+
+
+def _use_keys(given: dict[str, str]) -> None:
+    """Change this visit's keys. The thread starts again, so a sample trip never mixes with a real one."""
+    _new_chat()
+    _close_keys()
+    st.session_state.own_keys = given
+
+
 def _conversation(sample: bool) -> tuple[str | None, Any]:
     """The chat. Returns the new message, if any, and where the running turn is drawn."""
     live = None
     with st.container(key="rail"):
         st.markdown("<div class='rc-panel-title'>Conversation</div>", unsafe_allow_html=True)
+        if _own_keys():
+            label = "Your keys" if st.session_state.get("own_keys") else "Add your keys"
+            if st.button(label, icon=":material/key:", key="open_keys", width="stretch"):
+                st.session_state.keys_open = True
         # One block inside the scroll area: the area shows its end, so a new step is always in view.
         with st.container(key="thread"), st.container(key="messages"):
             queue = st.session_state.queue
@@ -1568,8 +1652,11 @@ def _conversation(sample: bool) -> tuple[str | None, Any]:
                 live = _open_turn(queue[0])
         _support()
         st.markdown("<div class='rc-field-label'>Trip request</div>", unsafe_allow_html=True)
+        # Without keys every request would get the sample ride, so only its button is on.
+        locked = _own_keys() and sample
         prompt = st.chat_input(
-            "Where are you heading?",
+            "Add your keys to plan a trip" if locked else "Where are you heading?",
+            disabled=locked,
             key=f"composer-{st.session_state.composer_epoch}",
         )
     return prompt, live
@@ -1580,11 +1667,13 @@ def main() -> None:
     st.set_page_config(page_title="RouteChat", page_icon="🗺️", layout="wide")
     st.markdown(_CSS, unsafe_allow_html=True)
     _init()
-    sample = os.environ.get("STUBS") == "1"
+    sample = _sample()
     _topbar(sample)
     rail, stage = st.columns([0.28, 0.72], gap=16, vertical_alignment="top")
     with rail:
         prompt, live = _conversation(sample)
+    if st.session_state.keys_open:
+        _keys_dialog()
     if prompt:
         if st.session_state.waiting is not None:
             # The user wrote instead of allowing it, so that turn ends with its question.

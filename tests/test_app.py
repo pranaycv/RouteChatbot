@@ -305,6 +305,19 @@ def test_an_escalated_trip_opens_a_ticket_and_the_next_trip_starts_fresh(monkeyp
     assert "Nothing is waiting" not in " ".join(block.value for block in app.markdown)
 
 
+@pytest.mark.parametrize("setting, others_shown", [("", True), ("visitor", False)])
+def test_a_shared_app_shows_a_visitor_only_their_own_tickets(tmp_path, monkeypatch, setting, others_shown):
+    from routechat.logging import append_handoff
+
+    monkeypatch.setenv("ROUTECHAT_HANDOFF_QUEUE", str(tmp_path / "handoff.jsonl"))
+    monkeypatch.setenv("ROUTECHAT_KEYS", setting)
+    append_handoff({"request_id": "r_teammate", "reason": "needs_a_person", "redacted_request": "someone else"})
+    app, _ = _run_turns(monkeypatch, ["escalate"], ["my own trip"])
+    panel = next(block.value for block in app.markdown if "rc-support'" in block.value)
+    assert "my own trip" in panel
+    assert ("someone else" in panel) is others_shown
+
+
 def test_a_verifier_question_counts_and_its_escalation_opens_one_ticket(monkeypatch):
     from routechat.logging import read_handoffs
 
