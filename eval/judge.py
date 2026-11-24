@@ -135,7 +135,7 @@ def main():
         print(k.to_string(index=False)); return
     if not a.inputs.exists():
         print(f"judge: waiting for a D2 run ({a.inputs} is missing)"); return
-    records = [json.loads(x) for x in a.inputs.read_text().splitlines() if x.strip()]
+    records = [json.loads(x) for x in a.inputs.read_text(encoding="utf-8").splitlines() if x.strip()]
     out = run_judge(records, default_llm())
     out.to_csv(ANSWERS, index=False)
     bad = (~out.drop_duplicates("item_id")["judge_ok"]).sum()

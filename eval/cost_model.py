@@ -210,7 +210,7 @@ def main():
     ap.add_argument("--out", default="eval/results/cost_model.csv")
     args = ap.parse_args()
     a = load_assumptions()
-    lines = [json.loads(x) for x in Path(args.logs).read_text().splitlines() if x.strip()]
+    lines = [json.loads(x) for x in Path(args.logs).read_text(encoding="utf-8").splitlines() if x.strip()]
     stage = pd.DataFrame([x for x in lines if x.get("stage") != "request"])
     req = pd.DataFrame([x for x in lines if x.get("stage") == "request"])
     sr = pd.read_csv(args.success)["success"].mean() if args.success else NAN

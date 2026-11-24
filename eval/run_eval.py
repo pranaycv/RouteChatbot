@@ -42,7 +42,7 @@ def git_commit() -> str:
 
 def read_jsonl(p: Path) -> list[dict]:
     """Read a JSON-lines file; a missing file gives an empty list so the step can report what it is waiting for."""
-    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
 def save(df: pd.DataFrame, name: str, run_id: str):
