@@ -16,10 +16,10 @@
     "duration_min": 18,
     "climb_m": 38,
     "extra_m": [180],
-    "must_mention": ["closures", "hours:dark_horse"],
+    "must_mention": ["closures", "hours:canadian_tire"],
     "sponsored": true,
-    "message": "Here's a 4.2 km bike route, about 18 minutes, with 38 m of climbing. It stops at Canadian Tire on Yonge. I couldn't check for closures, and I couldn't confirm the opening hours. Sponsored: Dark Horse Espresso, 180 m from the route.",
-    "mentioned_ids": ["closures", "hours:dark_horse"]
+    "message": "Here's a 4.2 km bike route, about 18 minutes, with 38 m of climbing. It stops at Canadian Tire on Yonge. I couldn't check for closures, and I couldn't confirm the opening hours. There is a cafe 180 m from the route if you need one (Sponsored: Dark Horse Espresso).",
+    "mentioned_ids": ["closures", "hours:canadian_tire"]
   },
   {
     "name": "handoff",

@@ -305,3 +305,25 @@ def test_map_error_gets_direct_reply_without_ticket(mode, reason, decision):
     assert state["report"].decision == decision
     assert template_message(state) == expected
     assert request_outcome(state) == decision
+
+
+@pytest.mark.parametrize(
+    ("order", "on_route", "status"),
+    [
+        (None, ["Tim Hortons, Barrie", "Tim Hortons, Vaughan"], "met"),
+        (None, ["Tim Hortons, Barrie"], "unmet"),
+        ((1, 2), ["Tim Hortons, Barrie", "Tim Hortons, Vaughan"], "met"),
+        ((1, 2), ["Tim Hortons, Barrie"], "unmet"),
+    ],
+)
+def test_a_stop_wanted_twice_must_be_on_the_route_twice(order, on_route, status):
+    orders = order or (None, None)
+    state = _state(stops=[Stop(query="Tim Hortons", category=None, required=True, order=n) for n in orders])
+    state["places"] = [
+        ResolvedPlace(role="stop", query="Tim Hortons", name=name, lon=0, lat=0, source="test") for name in on_route
+    ]
+    route = state["candidates"][0]
+    state["candidates"] = [route.model_copy(update={"stops_in_order": on_route})]
+    checks = {check.id: check.status for check in verify_node(state)["report"].checks}
+    assert checks["stop:tim_hortons"] == status
+    assert list(checks).count("hours:tim_hortons") == 1

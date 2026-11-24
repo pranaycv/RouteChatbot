@@ -26,3 +26,15 @@ Every prompt change gets an entry: what changed, why, and the metric before and 
 - What: an unmet check is stated as failed, an unverifiable one as not confirmed. Measurements are copied as written. A compare request gets one sentence on the other mode. Nothing is said about stops, checks or sponsors that are not there. The facts block gains other_route, and its evidence is rounded (routechat/evidence.py).
 - Why: the live GUI test on 23 Nov. Two correct handoffs were replaced by the fallback sentence because the guard did not know the numbers in the evidence, and a compare reply left out the second mode.
 - Metric before and after: not measured. Faithfulness and disclosure completeness wait for the WP10 judge.
+
+## rewriter_v1
+
+- What: first prompt of the conversation rewriter (routechat/agents/rewriter.py). It turns the conversation and the latest message into one full request in correct English, asks which trip when two fit, writes a stop wanted several times as that many stops, and passes messages that are not about a trip.
+- Why: live GUI tests on 24 Nov. With several trips in one chat the classifier and extractor could not tell which one a message was about, misspelled requests failed, and "a couple of times" gave one stop.
+- Metric: 72 hand-written conversations, two to three runs each. On an earlier wording: gpt-6-luna with reasoning off, 208 of 216; claude-haiku-5.5 (low), 207; deepseek-v4.1-flash, 203. These conversations were written with the prompt, so they are not a held-out test. First messages on D2, 977 gold fields graded through the classifier and extractor: 877 right as written, 880 right with the rewrite. No refusal label changed in 43 refusal and handoff messages.
+
+## writer_v3
+
+- What: the model no longer sees or writes the sponsored place. Code adds one fixed sentence, always labelled, with no rating and no praise (templates.sponsor_text). Sentences such as "there are no special checks to mention" are banned, and met and unmet results are said in everyday words.
+- Why: the live GUI test on 24 Nov. The sponsor read like an advert and changed its wording each time.
+- Metric before and after: not measured. Faithfulness and disclosure completeness wait for the WP10 judge.

@@ -20,9 +20,8 @@ RouteAction = Literal[
     "refuse",
 ]
 # Accepted modes are walk, run, bike, and car. A run is routed like a walk.
-# A combination of those four is also accepted. hike and transit stay in the
-# list so they can be named and turned away. multimodal is accepted only when
-# every part is one of the four allowed modes.
+# Each trip uses one mode. hike, transit, and multimodal (a combined trip)
+# stay in the list so they can be named and turned away.
 PrimaryMode = Literal[
     "walk",
     "bike",
@@ -74,6 +73,19 @@ class GuardResult(_Contract):
     clean_text: str
     masked: list[str]
     reason: GuardReason | None
+
+
+class RewrittenQuery(_Contract):
+    """The rewriter. The trip the latest message is about, read from the whole conversation."""
+
+    status: Literal["ready", "pass", "unclear"] = Field(
+        description="ready: query is the full request. unclear: options are the trips it could be. pass: not about a trip."
+    )
+    query: str = Field(description="The request as one message that makes sense on its own. Empty unless ready.")
+    options: list[str] = Field(description="Two or three full requests when unclear. Otherwise empty.")
+    new_trip: bool = Field(
+        default=False, description="True when ready and not the trip of the last turn."
+    )
 
 
 class Stop(_Contract):

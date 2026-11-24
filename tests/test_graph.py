@@ -75,7 +75,7 @@ def _report(decision: str) -> VerificationReport:
 @pytest.mark.parametrize(
     ("router", "state", "expected"),
     [
-        (after_guard, {**_guard("allow")}, "classify"),
+        (after_guard, {**_guard("allow")}, "rewrite"),
         (after_guard, {**_guard("clarify")}, "write"),
         (after_guard, {**_guard("refuse")}, "write"),
         (after_guard, {**_guard("fixed_reply")}, "write"),
@@ -214,6 +214,59 @@ def test_clarify_after_one_followup_is_escalate():
     assert "extract" not in seen
 
 
+def _verifier_asks(error: str, **payload) -> dict:
+    """Run the real verifier, writer, and output guard on a trip the map tools turned away."""
+    from routechat.agents.writer import write_node
+    from routechat.guards.output_guard import output_guard
+    from routechat.schemas import RouteCandidate
+    from routechat.verify.decide import verify_node
+
+    mode = "unspecified" if error == "mode_not_supported" else "bike"
+    nodes = stub_nodes()
+    nodes["extract"] = lambda _state: {"constraints": _constraints(mode=mode)}
+    nodes["maps"] = lambda _state: {
+        "places": [],
+        "candidates": [RouteCandidate(id="x", provider="graphhopper", mode=mode, error=error)],
+    }
+    nodes.update(verify=verify_node, write=write_node, guard_out=output_guard)
+    return invoke({**PAYLOAD, **payload}, nodes)
+
+
+@pytest.mark.parametrize("error", ["mode_not_supported", "place_not_found"])
+def test_a_verifier_question_is_asked_once_and_then_escalated(error):
+    from routechat.agents.templates import ESCALATE
+    from routechat.logging import _stopped_at, request_outcome
+
+    first = _verifier_asks(error)
+    assert first["classification"].route_action == "plan"
+    assert first["final"].text != ESCALATE
+    assert (request_outcome(first), _stopped_at(first)) == ("clarify", "verify")
+
+    second = _verifier_asks(error, clarify_count=1)
+    assert second["classification"].route_action == "escalate"
+    assert second["final"].text == ESCALATE
+    assert (request_outcome(second), _stopped_at(second)) == ("handoff", "verify")
+
+
+def test_a_different_question_is_not_a_repeat():
+    from routechat.agents.templates import ESCALATE
+
+    new = _verifier_asks("place_not_found", clarify_count=1, asked=["mode_not_supported"])
+    assert new["final"].text != ESCALATE
+    again = _verifier_asks("mode_not_supported", clarify_count=1, asked=["mode_not_supported"])
+    assert again["final"].text == ESCALATE
+    too_many = _verifier_asks("place_not_found", clarify_count=3, asked=["a", "b", "c"])
+    assert too_many["final"].text == ESCALATE
+
+
+def test_a_refused_mode_is_not_escalated_after_a_followup():
+    from routechat.agents.templates import TRANSIT_NOT_SUPPORTED
+
+    state = _verifier_asks("transit_not_supported", clarify_count=1)
+    assert state["classification"].route_action == "plan"
+    assert state["final"].text == TRANSIT_NOT_SUPPORTED
+
+
 @pytest.mark.parametrize("stage", NODE_ORDER)
 def test_t_0_04_exception_yields_handoff(stage, caplog):
     caplog.set_level(logging.ERROR, logger="routechat.graph")
@@ -327,3 +380,16 @@ def running_final_dump():
     from routechat.stubs import running_final
 
     return running_final().model_dump()
+
+
+def test_each_step_is_reported_when_it_starts_and_when_it_is_done():
+    from routechat.graph import resume
+
+    heard: list[tuple[str, bool]] = []
+    state = invoke(PAYLOAD, stub_nodes(), on_step=lambda stage, update: heard.append((stage, update is not None)))
+    assert heard == [(stage, done) for stage in NODE_ORDER for done in (False, True)]
+    # The answer is the same as without a listener.
+    assert state["final"] == invoke(PAYLOAD, stub_nodes())["final"]
+    heard.clear()
+    resume(state | {"final": None}, None, stub_nodes(), lambda stage, update: heard.append((stage, update is not None)))
+    assert heard[0] == ("extract", False)

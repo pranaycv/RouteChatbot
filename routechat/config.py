@@ -48,6 +48,17 @@ class ClassifierSettings(_Strict):
     temperature: float
 
 
+class RewriterSettings(_Strict):
+    """The conversation rewriter. effort is the OpenRouter reasoning effort; older turns are dropped past the limit."""
+
+    model: str
+    temperature: float
+    max_tokens: int
+    effort: str | None = None
+    timeout_s: float
+    max_history_chars: int
+
+
 class ExtractorSettings(_Strict):
     """WP3 model. Stop and compare limits live under TripSettings, shared with the map tools."""
 
@@ -157,6 +168,7 @@ class Prices(_Strict):
 class Settings(_Strict):
     graph: GraphSettings
     guard: GuardSettings
+    rewriter: RewriterSettings
     classifier: ClassifierSettings
     extractor: ExtractorSettings
     writer: WriterSettings

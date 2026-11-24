@@ -277,7 +277,9 @@ def request_outcome(state: dict[str, Any]) -> str:
     if action == "escalate":
         return "handoff"
     if action == "clarify":
-        return "handoff" if state.get("clarify_count", 0) >= 1 else "clarify"
+        return "handoff" if "asked" not in state and state.get("clarify_count", 0) >= 1 else "clarify"
+    if not action and (_plain(state.get("rewrite")) or {}).get("status") == "unclear":
+        return "clarify"
     constraints = _plain(state.get("constraints")) or {}
     if constraints.get("missing_field") or constraints.get("too_many_stops"):
         return "clarify"
@@ -293,14 +295,17 @@ def _stopped_at(state: dict[str, Any]) -> str:
     guard = _plain(state.get("guard")) or {}
     if guard.get("decision") not in (None, "allow"):
         return "guard_in"
+    if (_plain(state.get("rewrite")) or {}).get("status") == "unclear":
+        return "rewrite"
+    # Read before the action: a verifier question asked twice is relabelled escalate by the graph.
+    if (_plain(state.get("report")) or {}).get("decision") in ("handoff", "clarify", "refuse"):
+        return "verify"
     action = (_plain(state.get("classification")) or {}).get("route_action")
     if action in ("refuse", "escalate", "clarify"):
         return "classify"
     constraints = _plain(state.get("constraints")) or {}
     if constraints.get("missing_field") or constraints.get("too_many_stops"):
         return "extract"
-    if (_plain(state.get("report")) or {}).get("decision") in ("handoff", "clarify", "refuse"):
-        return "verify"
     return ""
 
 

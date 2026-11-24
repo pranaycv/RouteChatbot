@@ -88,7 +88,7 @@ def test_the_writer_line_carries_model_prompt_tokens_and_cost(monkeypatch):
     write = next(line for line in lines if line["stage"] == "write")
     expected = token_cost("gpt-4.1-mini", 1200, 80)
     assert write["model"] == "gpt-4.1-mini"
-    assert write["prompt_version"] == "writer_v2"
+    assert write["prompt_version"] == "writer_v3"
     assert (write["tokens_in"], write["tokens_out"]) == (1200, 80)
     assert write["cost_usd"] == pytest.approx(expected)
     assert lines[-1]["cost_usd_total"] == pytest.approx(expected)
