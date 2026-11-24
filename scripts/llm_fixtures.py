@@ -2,13 +2,14 @@
 
     uv run python scripts/llm_fixtures.py --synthetic   # no key needed: writes the expected outputs as fixtures
     uv run python scripts/llm_fixtures.py --record      # needs OPENAI_API_KEY or OPENROUTER_API_KEY: records live
+    uv run python scripts/llm_fixtures.py --record --only extractor   # after an extractor prompt change
 
 Synthetic fixtures let `FIXTURES=replay uv run pytest` pass before the team's API key exists. They
 exercise the whole pipeline except the model itself, and each file says "source": "synthetic".
 Run --record once a key is in .env to replace them with real responses; the tests do not change.
 
 Fixture keys hash the full prompt, so any edit to prompts/label_guide_v1.md,
-prompts/classifier_fewshot_v1.jsonl or prompts/extractor_v1.md invalidates the fixtures. Re-run
+prompts/classifier_fewshot_v1.jsonl or the extractor prompt (prompts/extractor_v<N>.md) invalidates the fixtures. Re-run
 this script after a prompt change (and note it in prompts/CHANGELOG.md).
 """
 
@@ -41,17 +42,17 @@ def classifier_turns() -> list[dict]:
     return json.loads(SMOKE_PATH.read_text(encoding="utf-8"))
 
 
-def seed_synthetic() -> int:
+def seed_synthetic(only: str | None = None) -> int:
     settings = get_settings()
     n = 0
-    for case in extractor_cases():
+    for case in extractor_cases() if only in (None, "extractor") else []:
         cls = RouteClassification.model_validate(case["classification"])
         known = ConstraintSet.model_validate(case["known"]) if case["known"] else None
         messages = extractor.build_messages(case["clean_text"], cls, known)
         text = ConstraintSet.model_validate(case["model_output"]).model_dump_json()
         write_fixture(messages, settings.extractor.model, settings.extractor.temperature, "ConstraintSet", text)
         n += 1
-    for backend_name in ("prompted_small", "prompted_large"):
+    for backend_name in ("prompted_small", "prompted_large") if only in (None, "classifier") else ():
         backend = predict.resolve_backend(backend_name)
         for row in classifier_turns():
             turn = UserTurn.model_validate(row["turn"])
@@ -62,13 +63,13 @@ def seed_synthetic() -> int:
     return n
 
 
-def record_live() -> int:
+def record_live(only: str | None = None) -> int:
     os.environ["FIXTURES"] = "refresh"  # always call the model and overwrite, so --record really re-records
     n = 0
-    for case in extractor_cases():
+    for case in extractor_cases() if only in (None, "extractor") else []:
         extractor.extract(case["clean_text"], case["classification"], case["known"], request_id=case["id"])
         n += 1
-    for backend_name in ("prompted_small", "prompted_large"):
+    for backend_name in ("prompted_small", "prompted_large") if only in (None, "classifier") else ():
         backend = predict.resolve_backend(backend_name)
         for row in classifier_turns():
             predict.classify(UserTurn.model_validate(row["turn"]), backend=backend, request_id=row["id"])
@@ -81,8 +82,9 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--synthetic", action="store_true", help="write expected outputs as fixtures (no key needed)")
     group.add_argument("--record", action="store_true", help="call the live model and record real responses")
+    parser.add_argument("--only", choices=("extractor", "classifier"), help="limit to one stage's fixtures (default: both)")
     args = parser.parse_args()
-    n = seed_synthetic() if args.synthetic else record_live()
+    n = seed_synthetic(args.only) if args.synthetic else record_live(args.only)
     print(f"{'seeded' if args.synthetic else 'recorded'} {n} fixtures in {extractor.ROOT / 'routechat' / 'fixtures' / 'llm'}")
 
 

@@ -18,13 +18,25 @@ latency and cost from the stage log.
 Outputs: eval/results/extractor.csv (one row per model variant) and
 eval/results/extractor_predictions.jsonl (every prediction next to its gold, for error analysis).
 Runs with FIXTURES=record so a rerun replays what was already paid for.
+
+Two scores per field. Strict: normalised string equality (case and surrounding space; lists as sets; stops as
+(query, category, required)). Lenient: in addition ignores a leading article, tolerates spelling (difflib ratio
+>= 0.85, so "Scoatiabank Arena" matches "Scotiabank Arena"), accepts a null destination for a loop whose gold
+destination repeats the origin (ConstraintSet semantics v1: a loop has no destination), and compares stops by
+query only, because D2 labels categories with its own vocabulary (named_place, restaurant, fuel_or_charging)
+and the semantics doc with another (null for a named place, ev_charging_station). Strict is the headline.
+
+EXTRACTOR_PROMPT_VERSION=extractor_v2 scores another prompt version; --append merges its rows into the existing
+CSV and predictions (keyed by variant and prompt_version) instead of overwriting them.
 """
 
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
+import re
 import statistics
 import sys
 import time
@@ -62,6 +74,42 @@ def norm(field: str, value):
     return value
 
 
+_ARTICLE = re.compile(r"^(the|a|an)\s+", re.I)
+
+
+def place_key(value) -> str:
+    return _ARTICLE.sub("", (value or "").strip().lower()).rstrip(".")
+
+
+def places_match(a, b) -> bool:
+    """Article-insensitive and spelling-tolerant equality of two place strings (both empty counts as a match)."""
+    ka, kb = place_key(a), place_key(b)
+    if ka == kb:
+        return True
+    if not ka or not kb:
+        return False
+    return difflib.SequenceMatcher(None, ka, kb).ratio() >= 0.85
+
+
+def lenient_hit(field: str, pred: ConstraintSet, gold: ConstraintSet) -> bool:
+    if field in ("origin", "destination"):
+        pv, gv = getattr(pred, field), getattr(gold, field)
+        if field == "destination" and gold.loop and gv and pv is None and place_key(gv) == place_key(gold.origin):
+            return True  # semantics v1: a loop has no destination; the D2 gold repeats the origin
+        return places_match(pv, gv)
+    if field == "stops":
+        if len(pred.stops) != len(gold.stops):
+            return False
+        used: set[int] = set()
+        for g in gold.stops:
+            match = next((i for i, s in enumerate(pred.stops) if i not in used and places_match(s.query, g.query)), None)
+            if match is None:
+                return False
+            used.add(match)
+        return True
+    return norm(field, getattr(pred, field)) == norm(field, getattr(gold, field))
+
+
 def classification_for(record: dict, gold: ConstraintSet) -> RouteClassification:
     for key in ("labels", "classification", "expected_classification"):
         if isinstance(record.get(key), dict):
@@ -87,7 +135,9 @@ def run_variant(name: str, model: str, effort: str | None, records: list[dict], 
     """Run the extractor on every scorable record with one model setting; return the summary row."""
     settings = get_settings()
     per_field = {f: 0 for f in FIELDS}
+    per_field_lenient = {f: 0 for f in FIELDS}
     exact = 0
+    exact_lenient = 0
     invent = 0
     unparseable = 0
     latencies, costs, tokens_in, tokens_out = [], [], [], []
@@ -127,17 +177,22 @@ def run_variant(name: str, model: str, effort: str | None, records: list[dict], 
         tokens_out.append(result.tokens_out)
 
         hits = {f: norm(f, getattr(pred, f)) == norm(f, getattr(gold, f)) for f in FIELDS}
+        hits_lenient = {f: hits[f] or lenient_hit(f, pred, gold) for f in FIELDS}
         for f, h in hits.items():
             per_field[f] += h
+        for f, h in hits_lenient.items():
+            per_field_lenient[f] += h
         exact += all(hits.values())
+        exact_lenient += all(hits_lenient.values())
         inv = invented(pred, text, known)
         invent += inv
         scored += 1
-        writer.write(json.dumps({"variant": name, "item_id": r.get("item_id") or r.get("id"), "text": text, "gold": gold.model_dump(), "pred": pred.model_dump(), "field_hits": hits, "invented": inv}, ensure_ascii=False) + "\n")
+        writer.write(json.dumps({"variant": name, "item_id": r.get("item_id") or r.get("id"), "text": text, "gold": gold.model_dump(), "pred": pred.model_dump(), "field_hits": hits, "field_hits_lenient": hits_lenient, "invented": inv, "prompt_version": extractor.prompt_version()}, ensure_ascii=False) + "\n")
 
     n = max(scored, 1)
-    row = {"variant": name, "model": model, "reasoning_effort": effort or "", "n": scored, "exact_match": exact / n, "invented_value_rate": invent / n, "unparseable": unparseable}
+    row = {"variant": name, "model": model, "reasoning_effort": effort or "", "n": scored, "exact_match": exact / n, "exact_match_lenient": exact_lenient / n, "invented_value_rate": invent / n, "unparseable": unparseable}
     row.update({f"acc_{f}": per_field[f] / n for f in FIELDS})
+    row.update({f"acc_{f}_lenient": per_field_lenient[f] / n for f in ("origin", "destination", "stops")})
     row.update({
         "p50_ms": statistics.median(latencies) if latencies else float("nan"),
         "p95_ms": sorted(latencies)[int(0.95 * (len(latencies) - 1))] if latencies else float("nan"),
@@ -145,7 +200,7 @@ def run_variant(name: str, model: str, effort: str | None, records: list[dict], 
         "tokens_in_per_call": sum(tokens_in) / n,
         "tokens_out_per_call": sum(tokens_out) / n,
     })
-    print(f"{name:<28} n={scored:<4} exact={row['exact_match']:.3f} invented={row['invented_value_rate']:.3f} p50={row['p50_ms']:.0f}ms cost/1k=${row['cost_per_1000_calls_usd']:.2f}")
+    print(f"{name:<28} n={scored:<4} exact={row['exact_match']:.3f} lenient={row['exact_match_lenient']:.3f} invented={row['invented_value_rate']:.3f} p50={row['p50_ms']:.0f}ms cost/1k=${row['cost_per_1000_calls_usd']:.2f}")
     return row
 
 
@@ -155,6 +210,7 @@ def main() -> None:
     ap.add_argument("--reasoning-model", default="gpt-5-mini")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--d2", type=Path, default=D2)
+    ap.add_argument("--append", action="store_true", help="merge into the existing extractor.csv and predictions (keyed by variant and prompt_version) instead of overwriting")
     a = ap.parse_args()
 
     if not a.d2.exists():
@@ -166,7 +222,8 @@ def main() -> None:
     print(f"D2: {len(records)} records, {len(scorable)} with a gold ConstraintSet")
 
     configured = get_settings().extractor.model
-    variants = [("extractor_v1/" + configured, configured, None)]
+    version = extractor.prompt_version()
+    variants = [(f"{version}/" + configured, configured, None)]
     if a.ablation:
         for m in ("gpt-4.1-nano", "gpt-4.1-mini"):
             if m != configured:
@@ -175,15 +232,35 @@ def main() -> None:
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     rows = []
-    with (RESULTS / "extractor_predictions.jsonl").open("w", encoding="utf-8") as writer:
+    pred_path = RESULTS / "extractor_predictions.jsonl"
+    keep: list[str] = []
+    if a.append and pred_path.exists():
+        new_keys = {(name, version) for name, _, _ in variants}
+        for line in pred_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            if (d.get("variant"), d.get("prompt_version", "extractor_v1")) not in new_keys:
+                keep.append(line)
+    with pred_path.open("w", encoding="utf-8") as writer:
+        for line in keep:
+            writer.write(line + "\n")
         for name, model, effort in variants:
             rows.append(run_variant(name, model, effort, scorable, writer))
 
     import pandas as pd
 
     df = pd.DataFrame(rows)
-    df["prompt_version"] = extractor.PROMPT_VERSION
-    df.to_csv(RESULTS / "extractor.csv", index=False)
+    df["prompt_version"] = version
+    out = RESULTS / "extractor.csv"
+    if a.append and out.exists():
+        old = pd.read_csv(out)
+        if "prompt_version" not in old.columns:
+            old["prompt_version"] = "extractor_v1"
+        keys = set(zip(df.variant, df.prompt_version))
+        old = old[[k not in keys for k in zip(old.variant, old.prompt_version)]]
+        df = pd.concat([old, df], ignore_index=True)
+    df.to_csv(out, index=False)
     print(f"wrote {RESULTS / 'extractor.csv'} ({len(df)} rows) and extractor_predictions.jsonl")
 
 

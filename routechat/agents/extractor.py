@@ -7,15 +7,17 @@ code-side rules the handbook assigns to this stage. It never invents places, coo
 
 Graph entry point: extract_node(state) -> {"constraints": ConstraintSet}
 Function form:     extract(clean_text, classification, known) -> ConstraintSet
-Prompt:            prompts/extractor_v1.md (role, field rules, prohibitions, six worked examples)
+Prompt:            prompts/extractor_v<N>.md (role, field rules, prohibitions, worked examples); see prompt_version()
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Mapping
 
 from pydantic import ValidationError
@@ -24,15 +26,35 @@ from routechat.config import ROOT, get_settings
 from routechat.llm import LLMResult, Message, api_calls_for, complete, log_stage
 from routechat.schemas import ConstraintSet, RouteClassification
 
-PROMPT_VERSION = "extractor_v1"
-PROMPT_PATH = ROOT / "prompts" / f"{PROMPT_VERSION}.md"
+# v1 (18 Nov): first version. v2 (24 Nov): the origin may sit anywhere in the message, a stop only when the user
+# asks to stop, no leading article or "entrance to" on place names (prompts/CHANGELOG.md has the D2 numbers).
+# EXTRACTOR_PROMPT_VERSION overrides the default, so scripts/extractor_eval.py can score a new version without
+# changing what the app serves.
+DEFAULT_PROMPT_VERSION = "extractor_v2"
+PROMPT_VERSION = DEFAULT_PROMPT_VERSION  # the module constant some callers read; prompt_version() is authoritative
+
+
+def prompt_version() -> str:
+    return os.environ.get("EXTRACTOR_PROMPT_VERSION") or DEFAULT_PROMPT_VERSION
+
+
+def prompt_path(version: str) -> Path:
+    return ROOT / "prompts" / f"{version}.md"
+
+
+PROMPT_PATH = prompt_path(DEFAULT_PROMPT_VERSION)
 STAGE = "extract"
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
 
 
-@lru_cache(maxsize=1)
-def load_prompt() -> str:
-    return PROMPT_PATH.read_text(encoding="utf-8")
+@lru_cache(maxsize=4)
+def _read_prompt(version: str) -> str:
+    return prompt_path(version).read_text(encoding="utf-8")
+
+
+def load_prompt(version: str | None = None) -> str:
+    """The prompt file for the given version, else EXTRACTOR_PROMPT_VERSION or the default."""
+    return _read_prompt(version or prompt_version())
 
 
 def _as_classification(value: Any) -> RouteClassification:
@@ -200,7 +222,7 @@ def extract(
         round(cost, 8),
         api_calls,
         model=get_settings().extractor.model,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=prompt_version(),
         extra={"retries": calls - 1},
     )
     return constraints

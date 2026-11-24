@@ -130,7 +130,7 @@ def train(args: argparse.Namespace) -> dict:
     trainer = SFTTrainer(model=model, args=sft, train_dataset=data["train"], eval_dataset=data["validation"], processing_class=tokenizer, peft_config=lora)
 
     started = time.perf_counter()
-    trainer.train()
+    trainer.train(resume_from_checkpoint=str(args.resume_from) if args.resume_from else None)
     elapsed = time.perf_counter() - started
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -151,6 +151,7 @@ def train(args: argparse.Namespace) -> dict:
             "device": "cuda" if torch.cuda.is_available() else "cpu",
         }
     )
+    summary["resumed_from"] = str(args.resume_from) if args.resume_from else None
     (args.out / "run.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
     return summary
@@ -168,6 +169,7 @@ def main() -> None:
     parser.add_argument("--subset", type=int, default=None, help="train on the first N shuffled records (learning curve)")
     parser.add_argument("--dry-run", action="store_true", help="print the effective settings and record counts, no training")
     parser.add_argument("--bf16", action="store_true", help="bf16 weights and mixed precision for an Ampere or newer GPU; the T4 path is fp32 weights with fp16")
+    parser.add_argument("--resume-from", type=Path, default=None, help="continue an interrupted run from this checkpoint dir (optimizer and scheduler state included); run.json then covers only the resumed segment")
     train(parser.parse_args())
 
 
