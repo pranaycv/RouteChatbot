@@ -61,10 +61,13 @@ routechat/schemas.py     shared contracts, schemas v1
 routechat/graph.py       stage order and every branch
 routechat/stubs.py       running-example output for STUBS=1
 routechat/guards/        WP1 input guard and WP7 output guard
+routechat/agents/rewriter.py reads the conversation, writes one complete request
 routechat/agents/writer.py WP6 reply, template or one model call
 routechat/logging.py     WP7 masked JSON log
 routechat/app.py         WP7 Streamlit screen
-prompts/writer_v2.md     WP6 prompt
+routechat/progress.py    the words for each live step in the chat
+prompts/rewriter_v1.md   rewriter prompt
+prompts/writer_v3.md     WP6 prompt
 prompts/CHANGELOG.md     prompt changes
 prompts/judge_v1.md      WP10 judge prompt
 tests/test_graph.py      T-0-01 to T-0-05
@@ -125,7 +128,10 @@ These are fixed with schemas v1. A change is a pull request reviewed by the inte
 - **One writer per state field.** A stage returns only its own keys. It does not call the next stage. The graph is the only place that chooses the next node.
 - **One revise.** The verifier sets `revision_count` to 1 when it wants another pass through the map tools. If it asks again, the graph sets the count to 2 and sends the request to the writer.
 - **The extractor decides whether a place is missing.** The classifier can miss a place that is in the message, so a `clarify` about the origin or the destination is checked by the extractor. If it finds both, the graph relabels the turn as `plan`, or `replan` on a known trip. Otherwise the bot asks for the end the extractor could not find. The handbook sends every `clarify` to the writer. The classifier's own labels and its stage line do not change.
-- **A second clarify is escalate.** This covers a question from the classifier and one from the verifier, such as a missing mode or an unknown place. The app keeps `clarify_count` between turns. When that count is already 1 or more, the graph relabels the action as `escalate` before the writer runs.
+- **A missing start is the device location.** When a trip has a destination and no start, or the user says "my current location" or "here", the graph stops after the extractor and the app asks the browser (`routechat/locate.py`). `graph.resume` goes on from there, so no model runs twice. If the browser gives no location, or one rougher than 1 km, the app asks for a start as before. "My hotel" and other personal places are still asked for. The point goes only to the map tools and the map on screen, never to a model or the log (P-06). It works on https and on localhost.
+- **The rewriter runs after the input guard, for the app only.** It reads the earlier messages and writes one complete request in correct English. The classifier, the extractor and the verifier read that request. When two trips fit, the writer asks which one. A caller that sends no `history`, such as the evaluation, gets the message as it was written. So does a rewrite that fails, loses a word a refusal rests on, or names something nobody said.
+- **Places may be any distance apart.** The 50 km limit in WP4 is gone. When a name does not fit, or two far places fit equally well, the verifier asks the user (`place_unclear`).
+- **A second clarify is escalate.** The app also names its questions (`asked`): the same question twice on one trip, or a fourth one, goes to a person. A caller that only counts follows the rule below. This covers a question from the classifier and one from the verifier, such as a missing mode or an unknown place. The app keeps `clarify_count` between turns. When that count is already 1 or more, the graph relabels the action as `escalate` before the writer runs.
 - **Failures stop the run.** A raised exception or a spent 30-second budget writes a handoff (`system_error` or `timeout`) and the system-error sentence, then ends. The log stores the exception type. It does not store the exception message or the raw request, because this can happen before the input guard has masked the text.
 - **Place search is limited to Canada for now.** `maps.geocode_country` is `ca`. Set it to null to resolve places in any country, or to another ISO 3166 alpha-2 code. No city's coordinates are built into the configuration.
 - **`deadline` uses `time.monotonic()`.** The graph fills it in when the caller does not. Do not pass a `time.time()` value.

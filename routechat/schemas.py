@@ -75,6 +75,19 @@ class GuardResult(_Contract):
     reason: GuardReason | None
 
 
+class RewrittenQuery(_Contract):
+    """The rewriter. The trip the latest message is about, read from the whole conversation."""
+
+    status: Literal["ready", "pass", "unclear"] = Field(
+        description="ready: query is the full request. unclear: options are the trips it could be. pass: not about a trip."
+    )
+    query: str = Field(description="The request as one message that makes sense on its own. Empty unless ready.")
+    options: list[str] = Field(description="Two or three full requests when unclear. Otherwise empty.")
+    new_trip: bool = Field(
+        default=False, description="True when ready and not the trip of the last turn."
+    )
+
+
 class Stop(_Contract):
     """One stop between the origin and the destination."""
 

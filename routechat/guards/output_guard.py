@@ -16,7 +16,7 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-from routechat.agents.templates import ESCALATE
+from routechat.agents.templates import ESCALATE, sponsor_text
 from routechat.evidence import evidence_numbers
 from routechat.guards.input_guard import _mask_personal_data
 from routechat.logging import stage_line
@@ -258,7 +258,11 @@ def fallback_text(candidate: Any | None, report: Any | None) -> str:
                 parts.append(sentence)
         sponsored = _field(report, "sponsored")
         if sponsored is not None:
-            parts.append(f"Sponsored: {_field(sponsored, 'name')}.")
+            parts.append(
+                sponsor_text(
+                    _field(sponsored, "name"), _field(sponsored, "category"), _field(sponsored, "distance_m")
+                )
+            )
     return " ".join(parts)
 
 

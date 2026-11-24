@@ -54,10 +54,13 @@ def _range_check(check_id, value, minimum, maximum, unit):
 
 
 def _stop_checks(constraints, places, route):
-    resolved_names = {
-        place.query.casefold(): place.name.casefold()
-        for place in places if place.role == "stop"
-    }
+    """One check per place asked for. A place wanted twice must be on the route twice."""
+    aliases = {}
+    for place in places:
+        if place.role == "stop":
+            aliases.setdefault(place.query.casefold(), set()).add(place.name.casefold())
+    for stop in constraints.stops:
+        aliases.setdefault(stop.query.casefold(), set()).add(stop.query.casefold())
     route_stops = [name.casefold() for name in route.stops_in_order]
     ordered = sorted(
         (stop for stop in constraints.stops if stop.required and stop.order is not None),
@@ -66,25 +69,24 @@ def _stop_checks(constraints, places, route):
     confirmed_order = set()
     cursor = 0
     for stop in ordered:
-        query = stop.query.casefold()
-        aliases = {query, resolved_names.get(query, query)}
         for index in range(cursor, len(route_stops)):
-            if route_stops[index] in aliases:
+            if route_stops[index] in aliases[stop.query.casefold()]:
                 confirmed_order.add(stop.order)
                 cursor = index + 1
                 break
 
-    for stop in constraints.stops:
-        query = stop.query.casefold()
+    for query in dict.fromkeys(stop.query.casefold() for stop in constraints.stops):
         slug = re.sub(r"[^\w]+", "_", query).strip("_")
-        if stop.required:
+        required = [stop for stop in constraints.stops if stop.required and stop.query.casefold() == query]
+        if required:
             present = (
-                stop.order in confirmed_order if stop.order is not None
-                else any(name in route_stops for name in (query, resolved_names.get(query)))
+                sum(name in aliases[query] for name in route_stops) >= len(required)
+                and all(stop.order in confirmed_order for stop in required if stop.order is not None)
             )
+            confirmed = f"Required stop{'s' if len(required) > 1 else ''} confirmed."
             yield Check(
                 id=f"stop:{slug}", hard=True, status="met" if present else "unmet",
-                evidence="Required stop confirmed." if present else "Required stop or its order is missing.",
+                evidence=confirmed if present else "Required stop or its order is missing.",
             )
         yield Check(
             id=f"hours:{slug}", hard=False, status="unverifiable",
@@ -233,7 +235,7 @@ def _verify(state):
         reason = next((route.error for route in routes if route.error), "no_route")
         if reason == "transit_not_supported":
             return {"report": _report("refuse", reason=reason), "handoff": None}
-        if reason == "place_not_found":
+        if reason in {"place_not_found", "place_unclear"}:
             return {"report": _report("clarify", reason=reason), "handoff": None}
         if reason == "mode_not_supported":
             mode = next(route.mode for route in routes if route.error == reason)

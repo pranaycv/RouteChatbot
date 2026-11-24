@@ -88,7 +88,8 @@ def provider_and_client_kwargs() -> tuple[str, dict[str, Any]]:
 
 
 def _live_call(
-    messages: list[Message], model: str, temperature: float, max_tokens: int | None, schema: type | None
+    messages: list[Message], model: str, temperature: float, max_tokens: int | None, schema: type | None,
+    options: dict[str, Any] | None = None,
 ) -> tuple[str, int, int, str]:
     """One network call through langchain-openai. Returns (text, tokens_in, tokens_out, provider)."""
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -96,7 +97,7 @@ def _live_call(
 
     provider, kwargs = provider_and_client_kwargs()
     model_name = f"openai/{model}" if provider == "openrouter" and "/" not in model else model
-    llm = ChatOpenAI(model=model_name, temperature=temperature, max_tokens=max_tokens, **kwargs)
+    llm = ChatOpenAI(model=model_name, temperature=temperature, max_tokens=max_tokens, **kwargs, **(options or {}))
     roles = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
     lc_messages = [roles[m["role"]](content=m["content"]) for m in messages]
     if schema is not None:
@@ -117,8 +118,12 @@ def complete(
     temperature: float = 0.0,
     max_tokens: int | None = None,
     schema: type | None = None,
+    options: dict[str, Any] | None = None,
 ) -> LLMResult:
-    """Send one chat completion, honouring FIXTURES=record|replay."""
+    """Send one chat completion, honouring FIXTURES=record|replay.
+
+    options are extra ChatOpenAI arguments, such as a timeout. They are not part of the fixture key.
+    """
     mode = os.environ.get("FIXTURES", "").strip().lower()
     schema_name = getattr(schema, "__name__", None) if schema is not None else None
     key = fixture_key(model, temperature, messages, schema_name)
@@ -135,7 +140,9 @@ def complete(
         return LLMResult(rec["text"], tokens_in, tokens_out, model, "replay", 0.0, cost_usd(model, tokens_in, tokens_out))
 
     started = time.perf_counter()
-    text, tokens_in, tokens_out, provider = _live_call(messages, model, temperature, max_tokens, schema)
+    text, tokens_in, tokens_out, provider = _live_call(
+        messages, model, temperature, max_tokens, schema, **({"options": options} if options else {})
+    )
     latency_ms = round((time.perf_counter() - started) * 1000, 3)
     if mode == "record":
         write_fixture(messages, model, temperature, schema_name, text, tokens_in, tokens_out, source="live", provider=provider)

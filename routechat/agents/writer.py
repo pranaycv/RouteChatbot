@@ -6,8 +6,9 @@
 
 Early exits return a fixed template. An accepted route, or a handoff that
 still has a route, is the only path that calls the model. The model sees
-rounded facts, checks, must_mention, and the sponsored place. It does not
-see the raw user text, and this module has no tools.
+rounded facts, checks and must_mention. It does not see the sponsored place,
+which code adds as one fixed sentence, or the raw user text, and this module
+has no tools.
 """
 
 from __future__ import annotations
@@ -26,7 +27,10 @@ from routechat.agents.templates import (
     UNPARSEABLE,
     mode_not_supported_text,
     place_not_found_text,
+    place_unclear_text,
+    sponsor_text,
     too_many_stops_text,
+    which_trip_text,
 )
 from routechat.config import get_settings
 from routechat.evidence import tidy_evidence
@@ -34,8 +38,9 @@ from routechat.llm import api_calls_for, complete
 from routechat.logging import stage_line, token_cost
 from routechat.schemas import ReplyDraft
 
-_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "writer_v2.md"
+_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "writer_v3.md"
 PROMPT_VERSION = _PROMPT_PATH.stem
+_PLACE_REASONS = frozenset({"place_not_found", "place_unclear"})
 _EARLY_GUARD = frozenset({"clarify", "refuse", "fixed_reply"})
 _EARLY_ACTIONS = frozenset({"refuse", "escalate", "clarify"})
 
@@ -92,17 +97,17 @@ def _error_reason(state: dict[str, Any]) -> str | None:
         return None
     if report is not None:
         reason = _field(report, "handoff_reason")
-        if reason in ERROR_TEMPLATES or reason == "place_not_found":
+        if reason in ERROR_TEMPLATES or reason in _PLACE_REASONS:
             return reason
     handoff = state.get("handoff")
     if handoff is not None:
         reason = _field(handoff, "reason")
-        if reason in ERROR_TEMPLATES or reason == "place_not_found":
+        if reason in ERROR_TEMPLATES or reason in _PLACE_REASONS:
             return reason
     if decision == "handoff":
         for candidate in state.get("candidates") or []:
             reason = _field(candidate, "error")
-            if reason in ERROR_TEMPLATES or reason == "place_not_found":
+            if reason in ERROR_TEMPLATES or reason in _PLACE_REASONS:
                 return reason
     return None
 
@@ -162,6 +167,10 @@ def template_message(state: dict[str, Any]) -> str | None:
         field = _field(classification, "clarify_field")
         return CLARIFY_TEMPLATES.get(field, UNPARSEABLE)
 
+    rewrite = state.get("rewrite")
+    if classification is None and rewrite is not None and _field(rewrite, "status") == "unclear":
+        return which_trip_text(_field(rewrite, "options"))
+
     constraints = state.get("constraints")
     if constraints is not None:
         missing = _field(constraints, "missing_field")
@@ -177,6 +186,10 @@ def template_message(state: dict[str, Any]) -> str | None:
     reason = _error_reason(state)
     if reason == "place_not_found":
         return place_not_found_text(_missing_query(state))
+    if reason == "place_unclear":
+        options = state.get("places") or []
+        query = _field(options[0], "query") if options else ""
+        return place_unclear_text(query, [_field(place, "name") for place in options])
     if reason == "mode_not_supported":
         return mode_not_supported_text(_unsupported_mode(state))
     if reason is not None:
@@ -197,15 +210,18 @@ def _required_stop_names(state: dict[str, Any]) -> list[str]:
     constraints = state.get("constraints")
     if constraints is None:
         return []
-    names_by_query = {
-        _field(place, "query"): _field(place, "name") for place in state.get("places") or []
-    }
+    # A place wanted twice has two names, one for each branch, in the order of the route.
+    names_by_query: dict[str, list[str]] = {}
+    for place in state.get("places") or []:
+        if _field(place, "role") == "stop":
+            names_by_query.setdefault(_field(place, "query"), []).append(_field(place, "name"))
     names: list[str] = []
     for stop in _field(constraints, "stops") or []:
         if not _field(stop, "required"):
             continue
         query = _field(stop, "query")
-        names.append(names_by_query.get(query, query))
+        found = names_by_query.get(query) or [query]
+        names.append(found.pop(0) if len(found) > 1 else found[0])
     return names
 
 
@@ -280,6 +296,8 @@ def system_prompt() -> str:
 
 
 def _messages(facts: dict[str, Any]) -> list[dict[str, str]]:
+    """The model does not see the sponsor. Code adds that sentence, so it is always labelled and never an advert."""
+    facts = {key: value for key, value in facts.items() if key != "sponsored"}
     return [
         {"role": "system", "content": system_prompt()},
         {"role": "user", "content": json.dumps(facts, ensure_ascii=False)},
@@ -320,11 +338,18 @@ def _write(state: dict[str, Any], llm: Any = None) -> tuple[ReplyDraft, tuple[in
     message = template_message(state)
     if message is not None:
         return ReplyDraft(message=message, mentioned_ids=[], kind="template"), (0, 0), {}
-    messages = _messages(build_facts(state))
+    facts = build_facts(state)
+    messages = _messages(facts)
     if llm is None:
-        return _live(messages)
-    result = llm.invoke(messages)
-    return _as_draft(result), _usage(result), {}
+        draft, usage, calls = _live(messages)
+    else:
+        result = llm.invoke(messages)
+        draft, usage, calls = _as_draft(result), _usage(result), {}
+    sponsor = facts["sponsored"]
+    if sponsor is not None:
+        line = sponsor_text(sponsor["name"], sponsor["category"], sponsor["distance_m"])
+        draft = draft.model_copy(update={"message": f"{draft.message.rstrip()} {line}"})
+    return draft, usage, calls
 
 
 def write_reply(state: dict[str, Any], llm: Any = None) -> ReplyDraft:
