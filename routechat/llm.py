@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from routechat.config import ROOT, get_settings
+from routechat.keys import get_key
 
 FIXTURE_DIR = ROOT / "routechat" / "fixtures" / "llm"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -78,10 +79,10 @@ def cost_usd(model: str, tokens_in: int, tokens_out: int) -> float:
 
 
 def provider_and_client_kwargs() -> tuple[str, dict[str, Any]]:
-    openai_key = os.environ.get("OPENAI_API_KEY")
+    openai_key = get_key("OPENAI_API_KEY")
     if openai_key:
         return "openai", {"api_key": openai_key}
-    router_key = os.environ.get("OPENROUTER_API_KEY")
+    router_key = get_key("OPENROUTER_API_KEY")
     if router_key:
         return "openrouter", {"api_key": router_key, "base_url": OPENROUTER_BASE_URL}
     raise LLMNoKey("set OPENAI_API_KEY or OPENROUTER_API_KEY in .env, or run with FIXTURES=replay")
