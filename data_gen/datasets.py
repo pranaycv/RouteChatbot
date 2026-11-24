@@ -506,17 +506,55 @@ def _write_d2_sheets(recs: List[dict], review_dir: str) -> None:
                 w.writerow([r["id"], c["role"], c["name"], c["lat"], c["lon"], "", "", ""])
 
 
+
+def read_csv_text(path: str) -> str:
+    """Decode a reviewer's CSV: UTF-8 if it is, else per line UTF-8 / Windows-1252 (an Excel 'CSV' save)."""
+    raw = Path(path).read_bytes()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return "\n".join(l.decode("utf-8") if _is_utf8(l) else l.decode("cp1252", errors="replace") for l in raw.splitlines())
+
+
 def import_d2_handwritten(csv_path: str, out_dir: str = DATASETS_DIR) -> int:
     path = Path(out_dir) / "d2_end_to_end.jsonl"
     recs = {r["id"]: r for r in read_jsonl(path)}
     n = 0
-    for row in csv.DictReader(open(csv_path, newline="", encoding="utf-8-sig")):
+    for row in csv.DictReader(io.StringIO(read_csv_text(csv_path))):
         msg = row["message"].strip()
         if msg and row["id"] in recs:
             recs[row["id"]].update(message=msg, source="human", utterance=msg)
             n += 1
     write_jsonl(path, list(recs.values()))
     return n
+
+
+def apply_d2_coords(csv_path: str, out_dir: str = DATASETS_DIR) -> dict:
+    """Copy human-verified coordinates into each record's gold_coordinates. A row with blank verified_lat/lon
+    keeps the generated value (and stays marked unverified). Rows are matched on (d2_id, role)."""
+    path = Path(out_dir) / "d2_end_to_end.jsonl"
+    recs = {r["id"]: r for r in read_jsonl(path)}
+    done = skipped = 0
+    missing = []
+    for row in csv.DictReader(io.StringIO(read_csv_text(csv_path))):
+        rec = recs.get(row["d2_id"].strip())
+        lat, lon = (row.get("verified_lat") or "").strip(), (row.get("verified_lon") or "").strip()
+        if rec is None:
+            missing.append(row["d2_id"])
+            continue
+        if not (lat and lon):
+            skipped += 1
+            continue
+        co = rec.get("gold_coordinates") or {}
+        role = row["role"].strip()
+        target = co.get(role) if role in ("origin", "destination") else next((c for c in co.get("stops", []) if c.get("role") == role), None)
+        if target is None:
+            missing.append(f"{row['d2_id']}/{role}")
+            continue
+        target.update(lat=float(lat), lon=float(lon), verified=True, verified_by=(row.get("verified_by") or "").strip())
+        done += 1
+    write_jsonl(path, list(recs.values()))
+    return {"applied": done, "left_unverified": skipped, "not_found": missing}
 
 
 # ----------------------------------------------------------------------------
@@ -910,11 +948,7 @@ def apply_d3_review(csv_path: str, out_dir: str = DATASETS_DIR) -> dict:
     """keep = unchanged; fix = replace the turns with `edited_turns` (same number of turns, ' ||| ' between
     turns); reject = move to d3_rejected.jsonl. Rows are matched by id. For `keep`, a filled edited_turns cell
     is ignored and reported (usually a paste into the wrong row). The pre-review file is saved once."""
-    raw = Path(csv_path).read_bytes()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:          # an Excel "CSV" save: decode per line
-        text = "\n".join(l.decode("utf-8") if _is_utf8(l) else l.decode("cp1252") for l in raw.splitlines())
+    text = read_csv_text(csv_path)
     decisions = {r["id"].strip(): r for r in csv.DictReader(io.StringIO(text))}
     path = Path(out_dir) / "d3_adversarial.jsonl"
     backup = Path(out_dir) / "d3_adversarial_prereview.jsonl"
@@ -971,7 +1005,7 @@ def _is_utf8(b: bytes) -> bool:
 # ----------------------------------------------------------------------------
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="python -m data_gen.datasets", description="Build D2-D5")
-    p.add_argument("what", choices=["d2", "d3", "d4", "d5", "all", "import-d2-handwritten", "apply-d3-review"])
+    p.add_argument("what", choices=["d2", "d3", "d4", "d5", "all", "import-d2-handwritten", "apply-d3-review", "apply-d2-coords"])
     p.add_argument("--offline", action="store_true")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--csv", help="import-d2-handwritten: the filled d2_handwrite_TODO.csv; apply-d3-review: the reviewed d3 sheet")
@@ -995,6 +1029,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                                       "seed": a.seed}, indent=2, sort_keys=True))
     if a.what == "d5":
         print("D5", prepare_d5(a.replies))
+    if a.what == "apply-d2-coords":
+        print("D2 coords", apply_d2_coords(a.csv))
     if a.what == "apply-d3-review":
         print("D3 review", apply_d3_review(a.csv))
     if a.what == "import-d2-handwritten":

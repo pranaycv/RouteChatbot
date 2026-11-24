@@ -449,3 +449,25 @@ def test_t_8_37_apply_d3_review(tmp_path):
     assert again["kept"] == out["kept"]
     fixed = [r for r in D.read_jsonl(str(tmp_path / "d3_adversarial.jsonl")) if r["id"] == recs[1]["id"]][0]
     assert fixed["turns"][-1].endswith(" X") and fixed["utterance"] == fixed["turns"][-1]
+
+
+def test_t_8_38_d2_coords_and_cp1252_import(tmp_path):
+    """Verified coordinates are applied by (id, role); blank rows stay unverified; cp1252 sheets import."""
+    import csv, shutil
+    from data_gen import datasets as D
+    shutil.copy(Path(D.DATASETS_DIR) / "d2_end_to_end.jsonl", tmp_path / "d2_end_to_end.jsonl")
+    recs = D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl"))
+    r0 = next(r for r in recs if (r.get("gold_coordinates") or {}).get("origin"))
+    with open(tmp_path / "c.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["d2_id", "role", "name", "lat", "lon", "verified_lat", "verified_lon", "verified_by"])
+        w.writerow([r0["id"], "origin", "x", 0, 0, "12.5", "-70.25", "TC"])
+    out = D.apply_d2_coords(str(tmp_path / "c.csv"), str(tmp_path))
+    assert out["applied"] == 1 and out["not_found"] == []
+    got = next(r for r in D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl")) if r["id"] == r0["id"])
+    assert got["gold_coordinates"]["origin"]["lat"] == 12.5 and got["gold_coordinates"]["origin"]["verified"]
+    hw = next(r for r in recs if r["source"] == "handwritten_todo")
+    (tmp_path / "h.csv").write_bytes(("id,message\n%s,caf\xe9 stop\n" % hw["id"]).encode("cp1252"))
+    assert D.import_d2_handwritten(str(tmp_path / "h.csv"), str(tmp_path)) == 1
+    got = next(r for r in D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl")) if r["id"] == hw["id"])
+    assert got["message"] == "caf\xe9 stop"
