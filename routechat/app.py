@@ -81,6 +81,8 @@ _END = [224, 122, 114, 230]
 _SPONSOR = [91, 159, 224, 220]
 _SPONSOR_INK = [31, 94, 158, 255]
 SPONSOR_LABEL = "Sponsored"
+TEAM = "Team Rosedale : MMAI 2027"
+TEAM_NAMES = ("Tara Cotter", "Preeti Shehrawat", "Rishi Sharma", "Ran Liu", "Pranay Soni")
 
 _ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services"
 _ESRI_CREDIT = "Imagery: Esri, Vantor, Earthstar Geographics, and the GIS User Community"
@@ -150,7 +152,11 @@ html, body, [data-testid="stAppViewContainer"], .stApp {
   color: var(--text);
   font-family: var(--font);
 }
-[data-testid="stHeader"] { background: transparent; height: 0; }
+/* On Streamlit Cloud this bar fills with links and lies over the top bar, so a tap must pass through it. */
+[data-testid="stHeader"] { background: transparent; height: 0; pointer-events: none; }
+[data-testid="stHeader"] * { pointer-events: none; }
+[data-testid="stStatusWidget"], [data-testid="stStatusWidget"] * { pointer-events: auto; }
+[data-testid="stToolbarActions"] { display: none !important; }
 #MainMenu, footer, [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stMain"], [data-testid="stAppViewContainer"] { overflow: hidden; }
 .block-container {
@@ -194,6 +200,27 @@ button, input, textarea, [data-testid="stMarkdown"], [data-testid="stMarkdownCon
 }
 
 .rc-brand { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.rc-team {
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  padding-left: 18px; border-left: 1px solid var(--stroke);
+}
+.rc-team b {
+  color: var(--blue-ink); font-size: 11px; font-weight: 700; letter-spacing: 0.03em; line-height: 1.25;
+}
+.rc-team div { display: flex; flex-wrap: wrap; gap: 6px; }
+.rc-team span {
+  display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+  color: var(--text); font-size: 12px; font-weight: 550; line-height: 1.2;
+  background: linear-gradient(180deg, #ffffff 0%, #eef5fc 100%); border: 1px solid rgba(47, 120, 196, 0.18);
+}
+/* The name takes its own width, the team sits next to it, and the button stays on the right. */
+.st-key-topbar [data-testid="stColumn"]:has(.rc-brand) {
+  flex: 0 0 auto !important; width: auto !important; min-width: 0 !important;
+}
+.st-key-topbar [data-testid="stColumn"]:has(.rc-team) {
+  flex: 1 1 0 !important; width: auto !important; min-width: 0 !important;
+}
+.st-key-topbar [data-testid="stColumn"]:has(.st-key-new_chat) { margin-left: auto !important; }
 .rc-mark {
   width: 36px; height: 36px; border-radius: 11px; flex: none;
   display: grid; place-items: center;
@@ -590,13 +617,20 @@ button:focus-visible {
 /* Tablets on their side: a narrower rail, and a map that keeps a useful height. */
 @media (min-width: 901px) and (max-width: 1099px) {
   :root { --rail: 310px; }
+  .rc-brand-copy p { display: none; }
+  .rc-team { padding-left: 12px; }
+  .rc-team div { gap: 4px; }
+  .rc-team span { padding: 3px 7px; font-size: 11px; }
+  .st-key-topbar [data-testid="stHorizontalBlock"] { gap: 12px !important; }
+  .st-key-topbar [data-testid="stColumn"]:has(.st-key-new_chat) { flex: 0 0 128px !important; width: 128px !important; min-width: 128px !important; }
   .st-key-stage > div:has([data-testid="stDeckGlJsonChart"]) { min-height: 260px !important; }
 }
 
 /* Phones, upright tablets, and phones on their side: one column that scrolls as a page. */
 @media (max-width: 900px), (max-height: 560px) {
   [data-testid="stMain"] { overflow: hidden auto !important; }
-  .block-container { padding: 12px !important; }
+  /* The space below the last card is for the badge Streamlit Cloud puts in the corner. */
+  .block-container { padding: 12px 12px 64px !important; }
   .block-container > [data-testid="stVerticalBlock"] { gap: 12px !important; }
 
   [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .st-key-rail) {
@@ -637,8 +671,11 @@ button:focus-visible {
   }
 
   .st-key-topbar { padding: 10px 12px !important; }
-  .st-key-topbar [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; }
-  .st-key-topbar [data-testid="stColumn"] { min-width: 0 !important; flex: 1 1 0 !important; }
+  .st-key-topbar [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 10px 8px !important; }
+  .st-key-topbar [data-testid="stColumn"]:has(.rc-brand) { flex: 1 1 0 !important; }
+  /* The team gets a row of its own under the name and the button. */
+  .st-key-topbar [data-testid="stColumn"]:has(.rc-team) { order: 3; flex: 1 0 100% !important; }
+  .rc-team { padding: 9px 0 0; border-left: none; border-top: 1px solid var(--stroke); width: 100%; }
   .st-key-topbar [data-testid="stColumn"]:last-child {
     flex: 0 0 128px !important;
     width: 128px !important;
@@ -1517,7 +1554,7 @@ def _stage(state: dict[str, Any] | None) -> None:
 def _topbar(sample: bool) -> None:
     pill = "<span class='rc-pill'>Sample trip</span>" if sample else ""
     with st.container(key="topbar"):
-        title, action = st.columns([1, 0.18], vertical_alignment="center", gap=12)
+        title, team, action = st.columns([0.3, 0.6, 0.18], vertical_alignment="center", gap=18)
         with title:
             st.markdown(
                 "<div class='rc-brand'>"
@@ -1532,6 +1569,9 @@ def _topbar(sample: bool) -> None:
                 f"{pill}</div>",
                 unsafe_allow_html=True,
             )
+        with team:
+            names = "".join(f"<span>{escape(name)}</span>" for name in TEAM_NAMES)
+            st.markdown(f"<div class='rc-team'><b>{escape(TEAM)}</b><div>{names}</div></div>", unsafe_allow_html=True)
         with action:
             if st.button("New chat", icon=":material/maps_ugc:", key="new_chat", width="stretch"):
                 _new_chat()
