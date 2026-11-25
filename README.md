@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/pranaycv/RouteChatbot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pranaycv/RouteChatbot/actions/workflows/ci.yml) [![Python 3.11](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)](.python-version) [![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-1C3C3C)](routechat/graph.py) [![Streamlit](https://img.shields.io/badge/app-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](routechat/app.py) [![Mapbox and GraphHopper](https://img.shields.io/badge/maps-Mapbox%20%2B%20GraphHopper-2F78C4)](routechat/maps)
 
-[Take it for a spin](#take-it-for-a-spin) · [How it works](#how-it-works) · [Run it locally](#run-it-locally) · [Data generation](#data-generation) · [Evaluation](#evaluation) · [Documentation](#documentation) · [Team](#team)
+[Take it for a spin](#take-it-for-a-spin) · [How it works](#how-it-works) · [Run it locally](#run-it-locally) · [Data generation](#data-generation) · [Tests and evaluation](#tests-and-evaluation) · [Documentation](#documentation) · [Team](#team)
 
 <img src="docs/assets/routechat-demo.gif" alt="RouteChat demo. The user asks for a trip to Blue Mountains with a pick-up and two Tim Hortons stops, answers 'By car' when asked how they will travel, gets a checked route on the map, and switches between map views." width="100%">
 
@@ -96,7 +96,7 @@ LangGraph runs eight stages in a fixed order and chooses every branch in Python.
 |---|---|---|
 | Input guard | Block attacks and unsupported input, mask personal data | Rules |
 | Query refiner (`rewriter.py`) | Turn the conversation into one complete request, shown in the chat as *Refined query* | `gpt-6-luna` |
-| Classifier | Choose plan, replan, compare, look up, clarify, escalate or refuse | `gpt-4.1-mini`, or fine-tuned Qwen2.5-1.5B |
+| Classifier | Write five labels: action (plan, replan, compare, look up, clarify, escalate or refuse), mode, live data, missing place, refusal reason | `gpt-4.1-mini`, or fine-tuned Qwen2.5-1.5B |
 | Extractor | Fill a typed `ConstraintSet` | `gpt-4.1-mini` |
 | Map tools | Find the places and measure the route | Mapbox, GraphHopper |
 | Verifier | Check each requirement, then accept, ask, refuse or hand off | Rules |
@@ -179,7 +179,7 @@ state = invoke({
 print(state["final"])
 ```
 
-Set `STUBS=1`, or the keys above in the environment, first. The app reads `.env` by itself; this call does not.
+The keys are read from `.env`. Without keys, set `STUBS=1` first to get the saved sample trip.
 
 ## Data generation
 
@@ -218,21 +218,53 @@ uv run python -m data_gen.pipeline generate --n 3000 --out data/d1_pilot_new
 
 The output then goes through human review, splitting and freezing. [data_gen/README.md](data_gen/README.md) has those steps, and the ones for D2 to D4.
 
-## Evaluation
+## Tests and evaluation
 
-Run the tests offline with recorded responses. No key is used and nothing is charged:
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/routechat-quality-dark.png">
+  <img src="docs/assets/routechat-quality-light.png" alt="How RouteChat is checked. 1 CI: a push or pull request starts GitHub Actions, which installs the locked packages and runs the tests; when they pass the pull request can be merged. 2 Evaluation, started by hand: test sets D1, D2 and D3 are run with live models and maps, an LLM judge answers four questions on D2 replies, and results are compared with the expected answers. 3 Review: 50 routes inspected by hand, 50 replies graded by hand against the judge, and the cost model from the D2 log. The output is scores and cost." width="100%">
+</picture>
+
+<sub>Built with <a href="https://mermaid.js.org/">Mermaid</a> from <a href="docs/assets/routechat-quality.mmd">routechat-quality.mmd</a>.</sub>
+
+### CI
+
+Every push and pull request runs [.github/workflows/ci.yml](.github/workflows/ci.yml) on GitHub Actions: it installs the locked packages with Python 3.11 and runs the tests. Model and map replies are recorded or scripted, so no key is used and nothing is charged. Run the same tests yourself:
 
 ```bash
 FIXTURES=replay uv run pytest
 ```
 
-Run the evaluation:
+CI checks the code. It does not score the models, because that needs live calls.
+
+### What is measured
+
+| Set | What runs | What is measured |
+|---|---|---|
+| D1, 420 messages | The classifier alone, up to four backends | Exact match on all five labels, macro-F1 per label, policy-critical errors, invalid JSON, latency, cost |
+| D2, 120 trips | The whole pipeline | Trip success, handoff precision and recall, extractor accuracy per field, latency, cost per successful trip |
+| D3, 119 attacks | The whole pipeline | Pass rate per attack family |
+
+A trip succeeds when its outcome is the expected one, every hard requirement of an accepted route is met, and the judge finds no unsupported claim.
+
+- **LLM judge.** `gpt-4.1` answers four yes or no questions about each D2 reply.
+- **People.** 50 routes are inspected by hand, and 50 replies are graded by hand to see how far the judge agrees (Cohen's kappa, target 0.6).
+- **Cost model.** Cost per request and per successful trip, from the D2 log and the prices in `config.yaml`.
+
+### Run the evaluation
+
+The full run calls the models, Mapbox and GraphHopper, so it needs the keys in `.env` and costs money:
 
 ```bash
-FIXTURES=replay uv run python -m eval.run_eval --all
+bash eval/final_run.sh
 ```
 
-Steps whose inputs are not available print `waiting for ...`. The final run calls the live providers and is started with `bash eval/final_run.sh`. [eval/README.md](eval/README.md) lists the metrics, the judge and the cost model.
+Results are written to `eval/results/`, which git ignores. The `ft` and `base` classifiers also need the training libraries, and `ft` needs the adapter. To run only the prompted ones, set `CLASSIFIER_BACKENDS=prompted_small,prompted_large`.
+
+> [!IMPORTANT]
+> Do not score with `FIXTURES=replay` on a fresh clone. The evaluation replies are not recorded in this repository, so every model call fails and the scores mean nothing.
+
+[eval/README.md](eval/README.md) has the metrics, the judge and the cost model in detail.
 
 ## Known limits
 
