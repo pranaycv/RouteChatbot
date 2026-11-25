@@ -1,7 +1,7 @@
 # ConstraintSet field meanings, v1
 
 Owner: WP3 (constraint extractor). Agreed with WP4 map tools and WP5 verifier (Preeti) on 18 Nov 2026. Status: v1 frozen.
-Source: schemas v1 in `routechat/schemas.py`, the handbook's WP3 extraction rules, and the README's "Decisions other packages depend on".
+Source: schemas v1 in `routechat/schemas.py`, the handbook's WP3 extraction rules, and "Decisions other packages depend on" in `docs/architecture.md`.
 
 The ConstraintSet is the form the extractor fills in from the user's message. Map tools and the verifier read it. This page states what every field means so the three packages never disagree. The types below are the frozen schema's.
 
