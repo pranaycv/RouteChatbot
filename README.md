@@ -1,6 +1,6 @@
 <div align="center">
 
-# RouteChat
+<h1><img src="docs/assets/routechat-logo.svg" alt="RouteChat logo" height="44" align="absmiddle">&nbsp; RouteChat</h1>
 
 ### 🚀 [routechatbot.streamlit.app](https://routechatbot.streamlit.app/)
 
@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/pranaycv/RouteChatbot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pranaycv/RouteChatbot/actions/workflows/ci.yml) [![Python 3.11](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)](.python-version) [![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-1C3C3C)](routechat/graph.py) [![Streamlit](https://img.shields.io/badge/app-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](routechat/app.py) [![Mapbox and GraphHopper](https://img.shields.io/badge/maps-Mapbox%20%2B%20GraphHopper-2F78C4)](routechat/maps)
 
-[Take it for a spin](#take-it-for-a-spin) · [How it works](#how-it-works) · [Run it locally](#run-it-locally) · [Evaluation](#evaluation) · [Documentation](#documentation) · [Team](#team)
+[Take it for a spin](#take-it-for-a-spin) · [How it works](#how-it-works) · [Run it locally](#run-it-locally) · [Data generation](#data-generation) · [Evaluation](#evaluation) · [Documentation](#documentation) · [Team](#team)
 
 <img src="docs/assets/routechat-demo.gif" alt="RouteChat demo. The user asks for a trip to Blue Mountains with a pick-up and two Tim Hortons stops, answers 'By car' when asked how they will travel, gets a checked route on the map, and switches between map views." width="100%">
 
@@ -181,7 +181,7 @@ print(state["final"])
 
 Set `STUBS=1`, or the keys above in the environment, first. The app reads `.env` by itself; this call does not.
 
-## Evaluation
+## Data generation
 
 | Set | Contents | Size |
 |---|---|---|
@@ -190,7 +190,35 @@ Set `STUBS=1`, or the keys above in the environment, first. The app reads `.env`
 | D3 | Adversarial requests in six attack families | 119 |
 | D4 | Invented sponsor catalog | 40 |
 
-The data is generated or hand-written by the team, with no real user data. [data_gen/README.md](data_gen/README.md) explains how it was made and how the test set is protected.
+The data is generated or hand-written by the team, with no real user data. The sets are already in the repository, so you need these steps only to check or remake them.
+
+Check that the test set matches its frozen hash:
+
+```bash
+uv run python -m data_gen.pipeline verify
+```
+
+Print the quotas the generator aims for:
+
+```bash
+uv run python -m data_gen.pipeline plan
+```
+
+Try the pipeline with the mock generator. It needs no key, and its output is for testing only:
+
+```bash
+uv run python -m data_gen.pipeline generate --n 50 --offline --out data/d1_pilot_trial
+```
+
+Generate for real. This needs `OPENROUTER_API_KEY` in `.env`, costs money and stops at a $5 cap. Keep `--out` on a new folder, so the committed files are not replaced:
+
+```bash
+uv run python -m data_gen.pipeline generate --n 3000 --out data/d1_pilot_new
+```
+
+The output then goes through human review, splitting and freezing. [data_gen/README.md](data_gen/README.md) has those steps, and the ones for D2 to D4.
+
+## Evaluation
 
 Run the tests offline with recorded responses. No key is used and nothing is charged:
 
