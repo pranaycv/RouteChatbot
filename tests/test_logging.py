@@ -18,7 +18,7 @@ from routechat.agents.writer import write_node
 from routechat.graph import invoke
 from routechat.guards.input_guard import input_guard
 from routechat.guards.output_guard import output_guard
-from routechat.logging import RETENTION_DAYS, append_handoff, read_handoffs, stage_line, token_cost
+from routechat.logging import RETENTION_DAYS, append_handoff, mask_for_log, read_handoffs, stage_line, token_cost
 from routechat.schemas import HandoffTicket
 from routechat.stubs import RUNNING_UTTERANCE, running_constraints, running_draft, stub_nodes
 
@@ -183,3 +183,26 @@ def test_a_ticket_masks_the_trip_details_too(queue):
     saved = queue.read_text()
     assert "Adelaide" not in saved and "416-555-0199" not in saved
     assert "Canadian Tire" in saved and '"created_at"' in saved
+
+
+@pytest.mark.parametrize(
+    ("check_id", "saved"),
+    [
+        ("stop:120_adelaide_street", "stop:[ADDRESS]"),
+        ("hours:1_king_st", "hours:[ADDRESS]"),
+        ("stop:25_st_clair_avenue_west", "stop:[ADDRESS]_west"),
+        ("stop:markham_rd_at_finch_ave_east", "stop:markham_rd_at_finch_ave_east"),
+        ("stop:tim_hortons", "stop:tim_hortons"),
+        ("stop:7_eleven", "stop:7_eleven"),
+        ("stop:24_hour_coffee_stand", "stop:24_hour_coffee_stand"),
+        ("avoid:highways", "avoid:highways"),
+    ],
+)
+def test_a_street_address_in_a_check_id_is_masked(queue, check_id, saved):
+    """A check id is made from the stop the user asked for."""
+    report = {"checks": [{"id": check_id, "status": "met", "hard": True}], "must_mention": [check_id]}
+    append_handoff({"request_id": "r1", "reason": "x", "redacted_request": "x", "report": report})
+    ticket = read_handoffs()[0]["report"]
+    assert ticket["checks"][0]["id"] == saved
+    assert ticket["must_mention"] == [saved]
+    assert mask_for_log(check_id) == saved

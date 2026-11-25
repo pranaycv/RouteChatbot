@@ -44,11 +44,10 @@ RETENTION_DAYS = 30
 _queue_lock = threading.Lock()
 
 _ROOT = Path(__file__).resolve().parents[1]
-_ADDRESS_RE = re.compile(
-    r"\b\d{1,6}\s+(?:[A-Za-z][A-Za-z.'-]*\s+){0,3}"
-    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct)\b\.?",
-    re.IGNORECASE,
-)
+_STREET = r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct)"
+_ADDRESS_RE = re.compile(rf"\b\d{{1,6}}\s+(?:[A-Za-z][A-Za-z.'-]*\s+){{0,3}}{_STREET}\b\.?", re.IGNORECASE)
+# A check id is the stop with underscores, such as stop:120_adelaide_street.
+_ADDRESS_ID_RE = re.compile(rf"(?<![A-Za-z0-9_])\d{{1,6}}_(?:[a-z]+_){{0,3}}{_STREET}(?![A-Za-z0-9])", re.IGNORECASE)
 # Four or more decimals is precise enough to point at a building. Three is about 100 m.
 _COORD_RE = re.compile(r"-?\d{1,3}\.\d{4,}")
 
@@ -66,7 +65,7 @@ def handoff_path() -> Path:
 def mask_for_log(text: str) -> str:
     """Mask personal data, street addresses, and precise coordinates."""
     masked, _types = _mask_personal_data(text)
-    masked = _ADDRESS_RE.sub("[ADDRESS]", masked)
+    masked = _ADDRESS_ID_RE.sub("[ADDRESS]", _ADDRESS_RE.sub("[ADDRESS]", masked))
 
     def _round_coord(match: re.Match[str]) -> str:
         return f"{float(match.group(0)):.3f}"
