@@ -269,10 +269,13 @@ Results are written to `eval/results/`, which git ignores. The `ft` and `base` c
 ## Known limits
 
 - **One mode per trip.** Transit, hiking and combined trips are turned away.
+- **Typed English requests only.** The voice agent in the first plan is not built.
 - **Canada only, for now.** Place search is set by `maps.geocode_country` in `config.yaml`.
 - **Preferences are checked, not steered.** The pilot uses GraphHopper's standard routing. If you ask to avoid highways or tolls and the route uses them, the trip goes to a person. Scenic and quiet roads are reported as unverifiable.
 - **Opening hours at arrival are not confirmed.** They are always shown as unverifiable.
 - **Place matching can be wrong.** A stop may resolve to a similar name nearby, so check the places list.
+
+[docs/scope.md](docs/scope.md) compares the pilot with the first plan.
 
 ## Project structure
 
@@ -303,6 +306,7 @@ config.yaml       models, thresholds and prices
 | Document | Contents |
 |---|---|
 | [Architecture and contracts](docs/architecture.md) | Stages, branches, plugging in a stage, decisions other packages depend on |
+| [Scope notes](docs/scope.md) | What the pilot covers, and what changed from the first plan |
 | [Deployment](docs/deploy.md) | Streamlit Community Cloud and visitor keys |
 | [ConstraintSet semantics](docs/constraintset_semantics_v1.md) | What each field means |
 | [Operating policy](policy/operating_policy.md) | Rules P-01 to P-09 and where they are enforced |

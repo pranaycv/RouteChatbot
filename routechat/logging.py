@@ -38,7 +38,7 @@ import orjson
 
 from routechat.guards.input_guard import _mask_personal_data
 
-# P-06 proposes deletion after 30 days. This is that decision, not a tuning knob.
+# P-06 sets deletion after 30 days. This is that decision, not a tuning knob.
 RETENTION_DAYS = 30
 
 _ROOT = Path(__file__).resolve().parents[1]
