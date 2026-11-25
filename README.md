@@ -37,35 +37,60 @@ Walking, running, cycling and driving are supported, with one mode per trip and 
 LangGraph runs eight stages in a fixed order and chooses every branch in Python. A language model reads and writes text. It does not choose the next step, measure the route or decide whether a requirement is met.
 
 ```mermaid
-flowchart LR
-    U([Request]) --> G1[Input guard]
-    G1 --> R[Rewriter]
-    R --> C[Classifier]
-    C --> E[Extractor]
-    E --> M[Map tools]
-    M --> V[Verifier]
-    V -. revise once .-> M
-    V --> W[Writer]
-    W --> G2[Output guard]
-    G2 --> A([Reply and map])
+flowchart TD
+    U(["💬 <b>Your message</b>"])
 
-    G1 -. blocked .-> W
-    R -. unclear trip .-> W
-    C -. clarify or refuse .-> W
-    E -. missing field .-> W
+    subgraph S1 ["<b>1 · Understand</b>"]
+        direction LR
+        G1["🛡️ <b>Input guard</b><br/>block attacks,<br/>mask personal data"]
+        R["✏️ <b>Query refiner</b><br/>one clear request<br/>from the whole chat"]
+        C["🏷️ <b>Classifier</b><br/>choose what<br/>to do"]
+        E["📋 <b>Extractor</b><br/>places, stops,<br/>mode, preferences"]
+        G1 --> R --> C --> E
+    end
 
-    classDef llm fill:#e3effb,stroke:#2f78c4,color:#1e2c3a
-    classDef code fill:#f2f5f9,stroke:#8a9bab,color:#1e2c3a
+    subgraph S2 ["<b>2 · Plan and check</b>"]
+        direction LR
+        M["🗺️ <b>Map tools</b><br/>Mapbox places,<br/>GraphHopper route"]
+        V["✅ <b>Verifier</b><br/>met, unmet or<br/>unverifiable"]
+        M --> V
+        V -.->|revise once| M
+    end
+
+    subgraph S3 ["<b>3 · Reply</b>"]
+        direction LR
+        W["💡 <b>Writer</b><br/>template or one<br/>model call"]
+        G2["🔎 <b>Output guard</b><br/>check the reply<br/>against the facts"]
+        W --> G2
+    end
+
+    U --> S1
+    S1 -->|complete trip| S2
+    S1 -.->|blocked, unclear,<br/>refused or incomplete| S3
+    S2 -->|accept, ask,<br/>refuse or hand off| S3
+    S3 --> A(["📍 <b>Route on the map</b>"])
+    S3 --> Q(["❓ <b>A short question</b>"])
+    S3 --> H(["🧑 <b>Refusal or handoff</b>"])
+
+    classDef llm fill:#dbeafe,stroke:#2f78c4,stroke-width:2px,color:#12263a
+    classDef code fill:#ffffff,stroke:#64748b,stroke-width:1.5px,color:#12263a
+    classDef io fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#12263a
+    classDef phase fill:transparent,stroke:#94a3b8,stroke-width:1.5px
     class R,C,E,W llm
     class G1,M,V,G2 code
+    class U,A,Q,H io
+    class S1,S2,S3 phase
+    linkStyle default stroke:#7c8b9c,stroke-width:2px
 ```
 
-<br><sub>Blue stages can call a language model. Grey stages are code. The main branches are shown; [docs/architecture.md](docs/architecture.md) has all of them.</sub>
+🟦 can call a language model · ⬜ code only · 🟩 what you see
+
+<sub>Flow built with <a href="https://mermaid.js.org/">Mermaid</a>: it is text in this README, drawn by GitHub. Simplified; <a href="docs/architecture.md">docs/architecture.md</a> has every branch.</sub>
 
 | Stage | Job | Built with |
 |---|---|---|
 | Input guard | Block attacks and unsupported input, mask personal data | Rules |
-| Rewriter | Turn the conversation into one complete request | `gpt-6-luna` |
+| Query refiner (`rewriter.py`) | Turn the conversation into one complete request, shown in the chat as *Refined query* | `gpt-6-luna` |
 | Classifier | Choose plan, replan, compare, look up, clarify, escalate or refuse | `gpt-4.1-mini`, or fine-tuned Qwen2.5-1.5B |
 | Extractor | Fill a typed `ConstraintSet` | `gpt-4.1-mini` |
 | Map tools | Find the places and measure the route | Mapbox, GraphHopper |
@@ -191,7 +216,7 @@ routechat/        application package
   app.py            Streamlit screen
   graph.py          stage order and every branch
   schemas.py        shared contracts, schemas v1
-  agents/           rewriter, extractor, map tools, writer
+  agents/           query refiner, extractor, map tools, writer
   classifier/       request classifier and its backends
   guards/           input and output guards
   maps/             Mapbox and GraphHopper clients
