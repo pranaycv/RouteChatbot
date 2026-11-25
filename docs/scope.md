@@ -44,6 +44,5 @@ The pilot uses GraphHopper's standard routing. It cannot steer a route away from
 
 ## Data kept
 
-- Log lines are masked, and dropped after 30 days (P-06, `RETENTION_DAYS` in `routechat/logging.py`).
-- Support tickets are masked. They are **not** dropped by age yet.
+- Log lines and support tickets are masked, and dropped after 30 days (P-06, `RETENTION_DAYS` in `routechat/logging.py`). Old ones go when a new one is added, or when the support list is opened.
 - The device location goes only to the map tools and the map on screen.
