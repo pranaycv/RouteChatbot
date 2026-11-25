@@ -11,7 +11,7 @@ LangGraph runs the stages in this order and chooses every branch in Python. A st
 | # | Node | Package | What it does | Calls a model |
 |---|---|---|---|:---:|
 | 1 | `guard_in` | WP1 | Checks length, language and attacks, and masks personal data | No |
-| 2 | `rewrite` | Rewriter | Reads the conversation and writes one complete request (app only) | Yes |
+| 2 | `rewrite` | Query refiner | Reads the conversation and writes one complete request (app only) | Yes |
 | 3 | `classify` | WP2 | Labels the action, the mode and the reason for a refusal | Yes |
 | 4 | `extract` | WP3 | Fills a typed `ConstraintSet` | Yes |
 | 5 | `maps` | WP4 | Finds the places with Mapbox and the route with GraphHopper | No |
