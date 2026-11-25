@@ -125,12 +125,12 @@ def test_required_stop_order_and_unverifiable_hours():
         ResolvedPlace(role="stop", query="Coffee", name="Park Cafe", lon=0, lat=0, source="test"),
     ]
     route = state["candidates"][0]
-    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Park Cafe", "Museum"]})]
+    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Origin", "Park Cafe", "Museum", "Destination"]})]
     report = verify_node(state)["report"]
     assert report.decision == "accept"
     assert report.must_mention == ["hours:coffee", "hours:museum"]
 
-    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Museum", "Park Cafe"]})]
+    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Origin", "Museum", "Park Cafe", "Destination"]})]
     report = verify_node(state)["report"]
     assert report.decision == "handoff"
     assert "stop:museum" in report.must_mention
@@ -323,7 +323,37 @@ def test_a_stop_wanted_twice_must_be_on_the_route_twice(order, on_route, status)
         ResolvedPlace(role="stop", query="Tim Hortons", name=name, lon=0, lat=0, source="test") for name in on_route
     ]
     route = state["candidates"][0]
-    state["candidates"] = [route.model_copy(update={"stops_in_order": on_route})]
+    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Origin", *on_route, "Destination"]})]
     checks = {check.id: check.status for check in verify_node(state)["report"].checks}
     assert checks["stop:tim_hortons"] == status
     assert list(checks).count("hours:tim_hortons") == 1
+
+
+@pytest.mark.parametrize(
+    ("origin", "destination"),
+    [("Tim Hortons", "Destination"), ("Origin", "Tim Hortons")],
+)
+def test_route_endpoints_do_not_count_as_required_stops(origin, destination):
+    state = _state(origin=origin, destination=destination, stops=[
+        Stop(query="Tim Hortons", category=None, required=True, order=None),
+        Stop(query="Tim Hortons", category=None, required=True, order=None),
+    ])
+    branch = "Tim Hortons, Toronto"
+    state["places"] = [
+        ResolvedPlace(role=role, query=query, name=name, lon=0, lat=0, source="test")
+        for role, query, name in (
+            ("origin", origin, origin),
+            ("stop", "Tim Hortons", branch),
+            ("destination", destination, destination),
+        )
+    ]
+    route = state["candidates"][0]
+    state["candidates"] = [route.model_copy(update={
+        "provider": "graphhopper",
+        "stops_in_order": [origin, branch, destination],
+    })]
+
+    report = verify_node(state)["report"]
+
+    assert report.decision == "handoff"
+    assert next(check.status for check in report.checks if check.id == "stop:tim_hortons") == "unmet"

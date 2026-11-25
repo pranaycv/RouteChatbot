@@ -61,7 +61,7 @@ def _stop_checks(constraints, places, route):
             aliases.setdefault(place.query.casefold(), set()).add(place.name.casefold())
     for stop in constraints.stops:
         aliases.setdefault(stop.query.casefold(), set()).add(stop.query.casefold())
-    route_stops = [name.casefold() for name in route.stops_in_order]
+    route_stops = [name.casefold() for name in route.stops_in_order[1:-1]]
     ordered = sorted(
         (stop for stop in constraints.stops if stop.required and stop.order is not None),
         key=lambda stop: stop.order,
