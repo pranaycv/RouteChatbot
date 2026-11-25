@@ -188,8 +188,8 @@ def after_classify(state: TripState) -> str:
     So does a clarify about the origin or the destination: the extractor reads
     the places, so it decides whether one is missing. The handbook sends every
     clarify to the writer. Other clarifies, escalate, and refuse go to the
-    writer. A clarify still unresolved after one follow-up is relabelled as
-    escalate by the write wrapper before the writer runs.
+    writer. A clarify that has been asked enough (_asked_enough) is relabelled
+    as escalate by the write wrapper before the writer runs.
     """
     if _finished(state):
         return END
@@ -356,10 +356,12 @@ def _asked_enough(state: TripState) -> bool:
 
 
 def _escalate_stale_clarify(state: TripState) -> tuple[TripState, dict]:
-    """Turn a second clarify into escalate before the writer sees the state.
+    """Turn a clarify into escalate when enough has been asked, before the writer sees the state.
 
     The classifier can ask, and so can the verifier when the map tools find no
-    mode or no such place. P-08 allows one follow-up in either case.
+    mode or no such place. Under P-08 the same question twice, or a fourth one,
+    goes to a person in either case. A caller that only counts its questions,
+    such as the evaluation, gets one follow-up (_asked_enough).
 
     The app keeps clarify_count between turns. The routing table calls this
     case "write, as escalate". The writer only picks a template from
