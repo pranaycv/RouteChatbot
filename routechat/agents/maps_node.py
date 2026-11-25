@@ -28,6 +28,22 @@ _AREAS = {"country", "region", "district", "place", "locality"}
 _SMALL_WORDS = {"the", "of", "at", "and", "a", "in", "on", "le", "la", "de", "du", "des"}
 # A stop Mapbox names "King" is what people call King Station.
 _STATIONS = {"railway_station", "public_transportation_station", "light_rail_station", "bus_station"}
+# What people call a kind of stop, as Mapbox names it. Its list is /search/searchbox/v1/list/category.
+# A word that is not here goes as it is, and Mapbox finds nothing for one it does not list.
+_KINDS = {
+    "lunch": "restaurant", "dinner": "restaurant", "supper": "restaurant", "meal": "restaurant",
+    "breakfast": "breakfast_restaurant", "brunch": "brunch_restaurant", "diner": "diner_restaurant",
+    "pizza": "pizza_restaurant", "tea": "teahouse", "snack": "convenience_store",
+    "ev_charging_station": "charging_station", "ev_charging": "charging_station", "ev_charger": "charging_station",
+    "fast_charger": "charging_station", "charger": "charging_station", "charging": "charging_station",
+    "gas": "gas_station", "fuel": "gas_station", "petrol": "gas_station", "petrol_station": "gas_station",
+    "fuel_or_charging": "gas_station", "groceries": "grocery", "grocery_store": "grocery",
+    "bike_shop": "bicycle_shop", "bookstore": "book_store", "bookshop": "book_store", "gym": "fitness_center",
+    "parking": "parking_lot", "doctor": "doctors_office", "drugstore": "pharmacy",
+    "lookout": "viewpoint", "scenic_lookout": "viewpoint", "scenic_viewpoint": "viewpoint",
+    # Mapbox lists no kind for these, so they are searched by name.
+    "washroom": "public_toilet", "restroom": "public_toilet", "bathroom": "public_toilet", "toilet": "public_toilet",
+}
 _ROUTE = "https://graphhopper.com/api/1/route"
 _DIRECTIONS = {"walk": "walking", "run": "walking", "bike": "cycling", "car": "driving-traffic"}
 
@@ -160,6 +176,19 @@ def _search(client, query, role, proximity=None, category=None, *, locality=Fals
     return matches
 
 
+def _stop_matches(client, stop, proximity):
+    """Places for a stop. A kind of stop, such as lunch, is searched as Mapbox names it, then by name."""
+    if not stop.category:
+        return _search(client, stop.query, "stop", proximity)
+    word = "_".join(_words(stop.category.replace("_", " ")))
+    kind = _KINDS.get(word, word)
+    found = _search(client, stop.query, "stop", proximity, kind)
+    if found:
+        return found
+    named = _search(client, kind.replace("_", " "), "stop", proximity)
+    return [place.model_copy(update={"query": stop.query}) for place in named if place.score >= _NAME_MATCH]
+
+
 def _origin_matches(client, query):
     if not query:
         return []
@@ -290,7 +319,7 @@ def _spread(client, stop, count, path, maximum_km, ends):
             return min(distance_m(_point(place), point) for point in path)
 
         options = [
-            place for place in _search(client, stop.query, "stop", near, stop.category)
+            place for place in _stop_matches(client, stop, near)
             if all(distance_m(_point(place), _point(other)) > _APART_M for other in found)
             and 2 * away(place) / 1000 <= maximum_km
         ]
@@ -390,7 +419,7 @@ def _resolve(client, constraints, picked=(), device=None, seen=()):
             return (distance_m(start, _point(place)) + distance_m(_point(place), end) - direct_m) / 1000
 
         near = [
-            place for place in _search(client, stop.query, "stop", start, stop.category)
+            place for place in _stop_matches(client, stop, start)
             if max(0, detour_km(place)) <= maximum_km
         ]
         near = _fitting(stop, near, (origin, destination))

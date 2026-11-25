@@ -428,3 +428,60 @@ def test_a_type_of_place_at_the_start_is_still_allowed():
         update={"stops": [Stop(query="coffee", category="coffee", required=True, order=None)]}
     )
     assert _stop({None: [_feature("Union Coffee", POINTS[0])]}, trip).name == "Union Coffee"
+
+
+class _Categories(_Places):
+    """Answers a category search by its slug, which is the last part of the address, and any other by its words."""
+
+    def __init__(self, categories, answers):
+        super().__init__({**ENDS, **answers})
+        self.categories, self.asked = categories, []
+
+    def request(self, api, method, url, params, body=None):
+        if "/category/" in url:
+            self.asked.append(url.rsplit("/", 1)[1])
+            return {"features": self.categories.get(self.asked[-1], [])}
+        return super().request(api, method, url, params, body)
+
+
+def _kind_of_stop(word, categories, answers=None, times=1):
+    stop = Stop(query=word, category=word, required=True, order=None)
+    client = _Categories(categories, answers or {})
+    trip = _trip("CN Tower", "Barrie Hall").model_copy(update={"stops": [stop] * times})
+    places = [place for place in maps._resolve(client, trip) if place.role == "stop"]
+    return places, client.asked
+
+
+@pytest.mark.parametrize(
+    ("word", "slug"),
+    [
+        ("lunch", "restaurant"), ("Dinner", "restaurant"), ("breakfast", "breakfast_restaurant"),
+        ("ev_charging_station", "charging_station"), ("EV charger", "charging_station"),
+        ("gas", "gas_station"), ("groceries", "grocery"), ("lookout", "viewpoint"),
+        ("coffee", "coffee"), ("ice cream", "ice_cream"), ("pharmacy", "pharmacy"),
+    ],
+)
+def test_a_kind_of_stop_is_searched_by_mapboxs_word_for_it(word, slug):
+    places, asked = _kind_of_stop(word, {slug: [_feature("The place", POINTS[1])]})
+    assert asked == [slug]
+    # The stop keeps the user's word, which is how the verifier and the reply know it.
+    assert [(place.name, place.query) for place in places] == [("The place", word)]
+
+
+def test_a_kind_mapbox_does_not_list_is_searched_by_name():
+    places, _ = _kind_of_stop("washroom", {}, {"public toilet": [
+        _feature("Finest Cleaners", POINTS[1]), _feature("Public Toilet", [-79.39, 43.651]),
+    ]})
+    assert [(place.name, place.query) for place in places] == [("Public Toilet", "washroom")]
+
+
+def test_a_kind_found_by_no_name_is_asked_about():
+    with pytest.raises(MapError, match="^place_not_found$"):
+        _kind_of_stop("zorbing", {}, {"zorbing": [_feature("Finest Cleaners", POINTS[1])]})
+
+
+def test_a_kind_wanted_twice_is_searched_by_mapboxs_word_too():
+    found = [_feature("One", [-79.394, 43.651]), _feature("Two", [-79.386, 43.651])]
+    places, asked = _kind_of_stop("lunch", {"restaurant": found}, times=2)
+    assert sorted(place.name for place in places) == ["One, Toronto", "Two, Toronto"]
+    assert set(asked) == {"restaurant"}
