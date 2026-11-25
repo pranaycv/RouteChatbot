@@ -1,0 +1,40 @@
+flowchart TD
+    subgraph T ["<b>1 · CI</b>"]
+        direction LR
+        P["⬆️ <b>Push or PR</b><br/>starts GitHub<br/>Actions"]
+        I["📦 <b>Install</b><br/>locked<br/>packages"]
+        U["🧪 <b>Tests</b><br/>recorded replies,<br/>no keys"]
+        G["✅ <b>Pass</b><br/>the PR can<br/>be merged"]
+        P --> I --> U --> G
+    end
+
+    subgraph E ["<b>2 · Evaluation</b>"]
+        direction LR
+        D["🗂️ <b>Test sets</b><br/>D1 classifier,<br/>D2 trips, D3 attacks"]
+        R["🚦 <b>Run</b><br/>live models, maps,<br/>masked log"]
+        J["⚖️ <b>LLM judge</b><br/>four questions<br/>on D2 replies"]
+        M["📏 <b>Measure</b><br/>compare with the<br/>expected answers"]
+        D --> R --> J --> M
+    end
+
+    subgraph H ["<b>3 · Review</b>"]
+        direction LR
+        A["🧑 <b>50 routes</b><br/>inspected<br/>by hand"]
+        B["🧑 <b>50 replies</b><br/>graded by hand,<br/>against the judge"]
+        C["💵 <b>Cost model</b><br/>from the<br/>D2 log"]
+        A ~~~ B ~~~ C
+    end
+
+    T -->|started by hand| E
+    E -->|routes, replies, logs| H
+    H --> O(["📊 <b>Scores and cost</b>"])
+
+    classDef llm fill:#dbeafe,stroke:#2f78c4,stroke-width:2px,color:#12263a
+    classDef code fill:#ffffff,stroke:#64748b,stroke-width:1.5px,color:#12263a
+    classDef io fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#12263a
+    classDef phase fill:transparent,stroke:#94a3b8,stroke-width:1.5px
+    class R,J llm
+    class P,I,U,G,D,M,A,B,C code
+    class O io
+    class T,E,H phase
+    linkStyle default stroke:#7c8b9c,stroke-width:2px
