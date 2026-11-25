@@ -2,11 +2,13 @@
 
 # RouteChat
 
-**Describe a trip in plain language. Get a real route, with every requirement checked.**
+### 🚀 [routechatbot.streamlit.app](https://routechatbot.streamlit.app/)
+
+**Say it your way. Get the route. See it verified.**
 
 [![CI](https://github.com/pranaycv/RouteChatbot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pranaycv/RouteChatbot/actions/workflows/ci.yml) [![Python 3.11](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)](.python-version) [![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-1C3C3C)](routechat/graph.py) [![Streamlit](https://img.shields.io/badge/app-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](routechat/app.py) [![Mapbox and GraphHopper](https://img.shields.io/badge/maps-Mapbox%20%2B%20GraphHopper-2F78C4)](routechat/maps)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Evaluation](#evaluation) · [Documentation](#documentation) · [Team](#team)
+[Take it for a spin](#take-it-for-a-spin) · [How it works](#how-it-works) · [Run it locally](#run-it-locally) · [Evaluation](#evaluation) · [Documentation](#documentation) · [Team](#team)
 
 <img src="docs/assets/routechat-demo.gif" alt="RouteChat demo. The user asks for a trip to Blue Mountains with a pick-up and two Tim Hortons stops, answers 'By car' when asked how they will travel, gets a checked route on the map, and switches between map views." width="100%">
 
@@ -32,60 +34,63 @@ It was built by Team Rosedale for MMAI 894 (Deep Learning).
 
 Walking, running, cycling and driving are supported, with one mode per trip and up to three required stops.
 
+## Take it for a spin
+
+**Open the live app: [routechatbot.streamlit.app](https://routechatbot.streamlit.app/)**
+
+Nothing to install. Press **Try the sample ride** to see a saved trip without any keys. To plan your own trips, use your own keys:
+
+### 1. Get your keys
+
+You need one key from each row. Sign in to the provider, create the key and copy it.
+
+| Key | What it does | Create it here |
+|---|---|---|
+| Language model, **either one** | Understands you and writes the reply | [OpenRouter](https://openrouter.ai/settings/keys) or [OpenAI](https://platform.openai.com/api-keys) |
+| Mapbox token | Finds the places | [Mapbox access tokens](https://console.mapbox.com/account/access-tokens/) |
+| GraphHopper key | Draws the route | [GraphHopper dashboard](https://graphhopper.com/dashboard/) |
+
+Make keys only for this app and set a spending limit on the language model key. Use a Mapbox token with no website restriction.
+
+### 2. Add them to the app
+
+Press **Add your keys**, paste all three, then press **Check and use**. The app checks each one and starts a fresh chat.
+
+### 3. Plan a trip
+
+1. Type where you want to go, with your stops and preferences.
+2. Answer if the app asks, for example *"By car"*.
+3. Read the route, the places and **What I checked**, then pick a map: **Light**, **Street**, **Dark** or **Satellite**.
+4. Change the trip in the same chat, or press **New chat** to start over.
+
+Try one of these:
+
+```text
+Plan a bike route from King Station to the University of Toronto with a coffee stop
+```
+
+```text
+Drive from Union Station in Toronto to Niagara Falls with a stop at Tim Hortons
+```
+
+> [!TIP]
+> Allow location access when you start from *"my location"*. The app may take a minute to wake up if nobody has used it for a while. Free GraphHopper keys have a limit per minute, so if no route is found, wait a minute and try again.
+
+> [!NOTE]
+> Usage is charged to your own accounts. Keys stay in the server's memory for your visit only and are not saved or logged. A refresh or **Remove my keys** clears them. See [how keys are handled](docs/deploy.md#how-keys-are-handled).
+
 ## How it works
 
 LangGraph runs eight stages in a fixed order and chooses every branch in Python. A language model reads and writes text. It does not choose the next step, measure the route or decide whether a requirement is met.
 
-```mermaid
-flowchart TD
-    U(["💬 <b>Your message</b>"])
-
-    subgraph S1 ["<b>1 · Understand</b>"]
-        direction LR
-        G1["🛡️ <b>Input guard</b><br/>block attacks,<br/>mask personal data"]
-        R["✏️ <b>Query refiner</b><br/>one clear request<br/>from the whole chat"]
-        C["🏷️ <b>Classifier</b><br/>choose what<br/>to do"]
-        E["📋 <b>Extractor</b><br/>places, stops,<br/>mode, preferences"]
-        G1 --> R --> C --> E
-    end
-
-    subgraph S2 ["<b>2 · Plan and check</b>"]
-        direction LR
-        M["🗺️ <b>Map tools</b><br/>Mapbox places,<br/>GraphHopper route"]
-        V["✅ <b>Verifier</b><br/>met, unmet or<br/>unverifiable"]
-        M --> V
-        V -.->|revise once| M
-    end
-
-    subgraph S3 ["<b>3 · Reply</b>"]
-        direction LR
-        W["💡 <b>Writer</b><br/>template or one<br/>model call"]
-        G2["🔎 <b>Output guard</b><br/>check the reply<br/>against the facts"]
-        W --> G2
-    end
-
-    U --> S1
-    S1 -->|complete trip| S2
-    S1 -.->|blocked, unclear,<br/>refused or incomplete| S3
-    S2 -->|accept, ask,<br/>refuse or hand off| S3
-    S3 --> A(["📍 <b>Route on the map</b>"])
-    S3 --> Q(["❓ <b>A short question</b>"])
-    S3 --> H(["🧑 <b>Refusal or handoff</b>"])
-
-    classDef llm fill:#dbeafe,stroke:#2f78c4,stroke-width:2px,color:#12263a
-    classDef code fill:#ffffff,stroke:#64748b,stroke-width:1.5px,color:#12263a
-    classDef io fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#12263a
-    classDef phase fill:transparent,stroke:#94a3b8,stroke-width:1.5px
-    class R,C,E,W llm
-    class G1,M,V,G2 code
-    class U,A,Q,H io
-    class S1,S2,S3 phase
-    linkStyle default stroke:#7c8b9c,stroke-width:2px
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/routechat-flow-dark.png">
+  <img src="docs/assets/routechat-flow-light.png" alt="RouteChat flow. Your message goes to 1 Understand: input guard, query refiner, classifier, extractor. A complete trip goes to 2 Plan and check: map tools and verifier, with one revision. Then 3 Reply: writer and output guard. A blocked, unclear, refused or incomplete request skips to the reply. The result is a route on the map, a short question, or a refusal or handoff." width="100%">
+</picture>
 
 🟦 can call a language model · ⬜ code only · 🟩 what you see
 
-<sub>Flow built with <a href="https://mermaid.js.org/">Mermaid</a>: it is text in this README, drawn by GitHub. Simplified; <a href="docs/architecture.md">docs/architecture.md</a> has every branch.</sub>
+<sub>Flow built with <a href="https://mermaid.js.org/">Mermaid</a> from <a href="docs/assets/routechat-flow.mmd">routechat-flow.mmd</a>. Simplified; <a href="docs/architecture.md">docs/architecture.md</a> has every branch.</sub>
 
 | Stage | Job | Built with |
 |---|---|---|
@@ -100,7 +105,7 @@ flowchart TD
 
 Models and thresholds are set in [config.yaml](config.yaml).
 
-## Quick start
+## Run it locally
 
 You need Python 3.11 and [uv](https://docs.astral.sh/uv/).
 
