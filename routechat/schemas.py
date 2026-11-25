@@ -204,7 +204,7 @@ class RouteCandidate(_Contract):
     duration_s: float | None = None
     duration_traffic_s: float | None = None
     ascend_m: float | None = None
-    stops_in_order: list[str] = Field(default_factory=list)
+    stops_in_order: list[str] = Field(default_factory=list, description="Ordered waypoints including the origin and destination.")
     highway_m: float | None = None
     toll_m: float | None = None
     ferry_m: float | None = None
