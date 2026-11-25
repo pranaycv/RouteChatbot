@@ -9,7 +9,7 @@ This branch only adds new files. It does not change any file owned by another pa
 |---|---|
 | `eval/log_schema.py` | The log fields evaluation and the cost model read, a line validator, and the outcome label for a final TripState. Stage names come from `routechat.graph.NODE_ORDER`. |
 | `eval/metrics.py` | Every WP10 metric as a function: trip success, classifier metrics, policy-critical errors, extractor field accuracy, adversarial pass rate, handoff precision/recall, latency, cost per successful request, judge agreement. |
-| `eval/run_eval.py` | The single command named in the root README. Steps that need other packages print "waiting for ..." until that code is merged. |
+| `eval/run_eval.py` | The evaluation entry point; `eval/final_run.sh`, named in the root README, runs each of its steps. Steps that need other packages print "waiting for ..." until that code is merged. |
 | `eval/cost_model.py` | WP11 Part C cost model. Unit prices come from `config.yaml` `prices:` through `routechat.config`; nothing is copied. |
 | `eval/cost_assumptions.yaml` | Business assumptions only: volumes, EUR to USD, fixed and error costs, revenue. No prices. |
 | `eval/judge.py` | Runs the LLM judge on every D2 reply and compares it with two people's grades (Cohen's kappa). |
@@ -23,7 +23,7 @@ This branch only adds new files. It does not change any file owned by another pa
 
 ```bash
 FIXTURES=replay uv run pytest                     # all tests, WP0's and these
-FIXTURES=replay uv run python -m eval.run_eval --all
+FIXTURES=record uv run python -m eval.run_eval --all   # live calls (needs keys); replay works only after a recorded run
 uv run python -m eval.cost_model --logs logs/<run_id>_D2.jsonl --success eval/results/end_to_end.csv
 RUN_JUDGE=1 uv run python -m eval.run_eval --e2e   # D2 run with the LLM judge (needs an API key)
 uv run python -m eval.judge --agreement report/judge_grading_A.csv report/judge_grading_B.csv
