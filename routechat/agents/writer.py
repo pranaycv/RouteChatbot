@@ -29,6 +29,7 @@ from routechat.agents.templates import (
     place_not_found_text,
     place_unclear_text,
     sponsor_text,
+    stop_is_an_end_text,
     too_many_stops_text,
     which_trip_text,
 )
@@ -144,6 +145,25 @@ def _missing_query(state: dict[str, Any]) -> str:
     return ""
 
 
+def _stop_at_an_end(state: dict[str, Any]) -> tuple[str, str] | None:
+    """The missing stop that is the trip's own start or end, with that end. None when it is another place."""
+    places = state.get("places") or []
+    ends = [place for place in places if _field(place, "role") != "stop"]
+    stops = _field(state.get("constraints"), "stops") or [] if state.get("constraints") is not None else []
+    wanted = [_field(stop, "query").casefold() for stop in stops]
+    found = {_field(place, "query").casefold() for place in places if _field(place, "role") == "stop"}
+    for stop in stops:
+        query = _field(stop, "query")
+        key = query.casefold()
+        # A place wanted twice may have one branch, so it is not known that there is no other.
+        if key in found or _field(stop, "category") or not _field(stop, "required") or wanted.count(key) > 1:
+            continue
+        for end in ends:
+            if key in (_field(end, "name").casefold(), _field(end, "query").casefold()):
+                return query, _field(end, "role")
+    return None
+
+
 def template_message(state: dict[str, Any]) -> str | None:
     """The fixed sentence for this state, or None when the model must write.
 
@@ -185,6 +205,9 @@ def template_message(state: dict[str, Any]) -> str | None:
 
     reason = _error_reason(state)
     if reason == "place_not_found":
+        at_end = _stop_at_an_end(state)
+        if at_end is not None:
+            return stop_is_an_end_text(*at_end)
         return place_not_found_text(_missing_query(state))
     if reason == "place_unclear":
         options = state.get("places") or []

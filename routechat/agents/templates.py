@@ -121,6 +121,12 @@ def place_not_found_text(query: str) -> str:
     return f"I couldn’t find “{name}”. Could you give an address or a nearby landmark?"
 
 
+def stop_is_an_end_text(query: str, role: str) -> str:
+    """The stop is the trip's own start or end, and the map tools found no other branch on the way."""
+    end = "starts" if role == "origin" else "ends"
+    return f"“{query.strip()}” is where this trip {end}, and I couldn’t find another one on the way. Where else should I stop?"
+
+
 def place_unclear_text(query: str, options: list[str]) -> str:
     """Ask which place is meant. One option is a doubtful match; more are places with the same name."""
     if not options:
