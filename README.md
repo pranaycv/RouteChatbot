@@ -296,4 +296,4 @@ Tara Cotter · Preeti Shehrawat · Rishi Sharma · Ran Liu · Pranay Soni
 
 Routing by [GraphHopper](https://www.graphhopper.com/) and place search by [Mapbox](https://www.mapbox.com/). Maps © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors and © [CARTO](https://carto.com/attributions). Satellite imagery by Esri, Vantor, Earthstar Geographics and the GIS User Community.
 
-Parts of this project were written with AI assistance, as noted in the files.
+**AI assistance:** this project was started with Grok (xAI) and Cursor. Claude (Anthropic) and Codex (OpenAI) were also used. Details are noted in the files.
