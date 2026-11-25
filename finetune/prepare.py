@@ -30,9 +30,10 @@ LABEL_KEYS = ("route_action", "primary_mode", "needs_live_data", "clarify_field"
 
 
 def parse_record(row: dict) -> tuple[UserTurn, RouteClassification]:
-    if "turn" in row and "labels" in row:
+    """Accept the few-shot shape ("turn" is a dict) and WP8's D1 shape (flat fields, "turn" is an int, "labels" nested)."""
+    if isinstance(row.get("turn"), dict) and "labels" in row:
         return UserTurn.model_validate(row["turn"]), RouteClassification.model_validate(row["labels"])
-    turn = UserTurn(utterance=row["utterance"], turn_index=int(row.get("turn_index", 0)), known=row.get("known"))
+    turn = UserTurn(utterance=row["utterance"], turn_index=int(row.get("turn_index", row.get("turn", 0))), known=row.get("known"))
     labels = row.get("labels") or {k: row[k] for k in LABEL_KEYS}
     return turn, RouteClassification.model_validate(labels)
 

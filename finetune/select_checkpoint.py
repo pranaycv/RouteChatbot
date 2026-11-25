@@ -1,7 +1,7 @@
 """WP9 step 4. Pick the checkpoint with the best joint exact match on the 200 validation records.
 
-    uv run --group finetune python finetune/select.py --run finetune/artifacts/run_r16_lr2e-4 --val finetune/data/val.jsonl
-    python finetune/select.py --run ... --val ... --copy-to finetune/artifacts/adapter
+    uv run --group finetune python finetune/select_checkpoint.py --run finetune/artifacts/run_r16_lr2e-4 --val finetune/data/val.jsonl
+    python finetune/select_checkpoint.py --run ... --val ... --copy-to finetune/artifacts/adapter
 
 Each checkpoint-*/ directory under --run is loaded as a LoRA adapter on the base model and run
 through routechat.classifier.predict.classify (the same parser and normalisation as runtime), so
