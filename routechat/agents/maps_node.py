@@ -233,7 +233,50 @@ def _path(client, constraints, origin, destination):
     return [[lon1 + (lon2 - lon1) * step / 50, lat1 + (lat2 - lat1) * step / 50] for step in range(51)]
 
 
-def _spread(client, stop, count, path, maximum_km):
+def _fitting(stop, places, ends):
+    """The places a named stop can mean. The nearest of them is chosen later.
+
+    The start or the end is not a stop: another branch with its name may take its place, and nothing
+    else may. Then the name that fits best wins over a nearer one, and a place named after the stop wins
+    over one that only mentions it, such as a listing "close to Tim Hortons". A type of place, such as
+    coffee, has no name to fit.
+    """
+    if stop.category:
+        return places
+
+    def is_end(place):
+        return any(
+            _words(place.name) == _words(end.name) and distance_m(_point(place), _point(end)) <= _APART_M
+            for end in ends
+        )
+
+    names = [_words(place.name) for place in places if is_end(place)]
+    if names:
+        places = [place for place in places if _words(place.name) in names and not is_end(place)]
+    if not places:
+        return []
+    exact = [place for place in places if place.exact]
+    if exact:
+        return exact
+    best = max(place.score for place in places)
+    places = [place for place in places if place.score == best]
+    return [place for place in places if _named_after(stop.query, place.name)] or places
+
+
+def _named_after(query, name):
+    """True when a name starts with the asked words, is at least half those words, or has them as its initials."""
+    asked = [word for word in _words(query) if word not in _SMALL_WORDS] or _words(query)
+    named = [word for word in _words(name) if word not in _SMALL_WORDS] or _words(name)
+    if not asked or not named:
+        return False
+    if len(asked) == 1 and asked[0] == "".join(word[0] for word in _words(name)):
+        return True
+    starts = len(named) >= len(asked) and all(_same_word(one, other, False) for one, other in zip(asked, named))
+    said = sum(any(_same_word(word, other, False) for other in asked) for word in named)
+    return starts or said * 2 >= len(named)
+
+
+def _spread(client, stop, count, path, maximum_km, ends):
     """Places for a stop that is wanted count times: different ones, spaced along the way."""
     lengths = [0.0]
     for first, second in zip(path, path[1:]):
@@ -251,6 +294,7 @@ def _spread(client, stop, count, path, maximum_km):
             if all(distance_m(_point(place), _point(other)) > _APART_M for other in found)
             and 2 * away(place) / 1000 <= maximum_km
         ]
+        options = _fitting(stop, options, ends)
         if not options:
             break
         # Of the places close to the way, the one nearest the even spacing.
@@ -335,23 +379,25 @@ def _resolve(client, constraints, picked=(), device=None, seen=()):
         if wanted[key] > 1:
             if key not in repeated:
                 path = path or _path(client, constraints, origin, destination)
-                repeated[key] = _spread(client, stop, wanted[key], path, maximum_km)
+                repeated[key] = _spread(client, stop, wanted[key], path, maximum_km, (origin, destination))
             if repeated[key]:
                 stops.append((repeated[key].pop(0), stop.order))
                 continue
             if stop.required:
                 raise _PlaceError("place_not_found", [origin, *(place for place, _ in stops), destination])
             continue
-        candidates = _search(client, stop.query, "stop", start, stop.category)
-        if candidates:
-            def detour_km(place):
-                return (distance_m(start, _point(place)) + distance_m(_point(place), end) - direct_m) / 1000
+        def detour_km(place):
+            return (distance_m(start, _point(place)) + distance_m(_point(place), end) - direct_m) / 1000
 
-            place = min(candidates, key=detour_km)
-            detour = max(0, detour_km(place))
-            if detour <= maximum_km:
-                stops.append((place.model_copy(update={"detour_km": detour}), stop.order))
-                continue
+        near = [
+            place for place in _search(client, stop.query, "stop", start, stop.category)
+            if max(0, detour_km(place)) <= maximum_km
+        ]
+        near = _fitting(stop, near, (origin, destination))
+        if near:
+            place = min(near, key=detour_km)
+            stops.append((place.model_copy(update={"detour_km": max(0, detour_km(place))}), stop.order))
+            continue
         if stop.required:
             raise _PlaceError("place_not_found", [origin, *(place for place, _ in stops), destination])
 

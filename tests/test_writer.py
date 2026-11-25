@@ -54,8 +54,10 @@ from routechat.schemas import (
     GuardResult,
     RefusalReason,
     ReplyDraft,
+    ResolvedPlace,
     RouteClassification,
     SponsoredSuggestion,
+    Stop,
 )
 from routechat.stubs import running_candidate, running_constraints, running_places, running_report
 from routechat.verify.decide import verify_node
@@ -524,3 +526,41 @@ def test_the_sponsor_sentence_is_plain_for_every_catalog_category():
         assert "right by the route" in text and "a place to stop" not in text
         assert "_" not in text and "rated" not in text
     assert "near the route" in sponsor_text("X", None, None)
+
+
+def _stop_not_found(query: str, *, origin: tuple[str, str], destination: tuple[str, str], times: int = 1):
+    """A trip whose required stop the map tools did not resolve. An end is its query and its name."""
+    stop = Stop(query=query, category=None, required=True, order=None)
+    constraints = running_constraints().model_copy(
+        update={"origin": origin[0], "destination": destination[0], "stops": [stop] * times}
+    )
+    places = [
+        ResolvedPlace(role=role, query=end[0], name=end[1], lon=0, lat=0, source="searchbox")
+        for role, end in (("origin", origin), ("destination", destination))
+    ]
+    report = running_report().model_copy(
+        update={"decision": "clarify", "handoff_reason": "place_not_found", "chosen_route": None, "must_mention": []}
+    )
+    state = _planned(constraints=constraints, report=report, candidates=[], places=places)
+    return write_reply(state, llm=_Boom()).message
+
+
+BARRIE = ("Barrie", "Barrie")
+
+
+@pytest.mark.parametrize("origin", [("Yorkdale Mall", "Yorkdale Place"), ("the mall", "Yorkdale Mall")])
+def test_a_stop_that_is_the_start_is_named_as_the_start(origin):
+    message = _stop_not_found("Yorkdale Mall", origin=origin, destination=BARRIE)
+    assert "“Yorkdale Mall” is where this trip starts" in message
+    assert message.endswith("Where else should I stop?")
+
+
+def test_a_stop_that_is_the_end_is_named_as_the_end():
+    message = _stop_not_found("Barrie", origin=("Yorkdale Mall", "Yorkdale Place"), destination=BARRIE)
+    assert "“Barrie” is where this trip ends" in message
+
+
+@pytest.mark.parametrize(("query", "times"), [("Nowhere Cafe", 1), ("Nowhere Cafe", 2)])
+def test_a_stop_that_is_neither_end_is_still_not_found(query, times):
+    message = _stop_not_found(query, origin=("Yorkdale Mall", "Yorkdale Place"), destination=BARRIE, times=times)
+    assert message.startswith("I couldn’t find “Nowhere Cafe”")
