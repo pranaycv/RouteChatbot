@@ -342,3 +342,89 @@ def test_a_known_place_does_not_pull_a_trip_from_another_city():
         "The Forks": [_feature("The Forks", [-97.131, 49.887], "Winnipeg")],
     })
     assert maps._resolve(client, _trip("Union Station", "The Forks"), seen=seen)[0].lon == -97.134
+
+
+LISTING = "2 Bedrooms Available to Make Your Stay a Pleasant. Close To Tim Hortons, etc."
+ENDS = {"CN Tower": [_feature("CN Tower", POINTS[0])], "Barrie Hall": [_feature("Barrie Hall", POINTS[2])]}
+
+
+def _one_stop(query, origin="CN Tower", destination="Barrie Hall"):
+    stop = Stop(query=query, category=None, required=True, order=None)
+    return _trip(origin, destination).model_copy(update={"stops": [stop]})
+
+
+def _stop(found, trip):
+    return next(place for place in maps._resolve(_Places({**ENDS, **found}), trip) if place.role == "stop")
+
+
+def test_a_stop_is_the_place_itself_and_not_a_listing_that_mentions_it():
+    found = {"Tim Hortons": [_feature(LISTING, POINTS[1]), _feature("Tim Hortons", [-79.39, 43.651])]}
+    assert _stop(found, _one_stop("Tim Hortons")).name == "Tim Hortons"
+
+
+def test_a_stop_wanted_twice_skips_a_listing_that_mentions_it():
+    found = {"Tim Hortons": [
+        _feature(LISTING, [-79.3933, 43.65]),
+        _feature("Tim Hortons", [-79.394, 43.651]),
+        _feature("Tim Hortons", [-79.386, 43.651]),
+    ]}
+    places = maps._resolve(_Places({**ENDS, **found}), _two_stops())
+    assert [place.name for place in places if place.role == "stop"] == ["Tim Hortons, Toronto"] * 2
+
+
+def test_a_crossing_is_not_swapped_for_a_nearer_one():
+    found = {"Markham Rd at Finch Ave East": [
+        _feature("Kennedy Rd at Finch Ave East", POINTS[1]),
+        _feature("Finch Ave East at Markham Rd", [-79.39, 43.651]),
+    ]}
+    assert _stop(found, _one_stop("Markham Rd at Finch Ave East")).name == "Finch Ave East at Markham Rd"
+
+
+def test_a_longer_name_that_starts_with_the_words_is_kept():
+    found = {"Ripleys": [
+        _feature("Cosy condo in the heart of downtown close to Ripleys", POINTS[1]),
+        _feature("Ripleys Aquarium of Canada and gift shop", [-79.39, 43.651]),
+    ]}
+    assert _stop(found, _one_stop("Ripleys")).name.startswith("Ripleys Aquarium")
+
+
+def test_a_short_form_still_finds_its_place():
+    found = {"ROM": [_feature("Druxys ROM Cafe", POINTS[1]), _feature("Royal Ontario Museum", [-79.39, 43.651])]}
+    assert _stop(found, _one_stop("ROM")).name == "Royal Ontario Museum"
+
+
+@pytest.mark.parametrize("end", ["origin", "destination"])
+def test_a_stop_is_another_branch_and_not_the_start_or_the_end(end):
+    here, other = POINTS[0] if end == "origin" else POINTS[2], [-79.39, 43.652]
+    found = {"Tim Hortons": [_feature("Tim Hortons", here), _feature("Tim Hortons", other)]}
+    place = _stop(found, _one_stop("Tim Hortons", **{end: "Tim Hortons"}))
+    assert [place.lon, place.lat] == other
+
+
+def test_a_stop_at_the_start_with_no_other_branch_is_asked_about():
+    """A shop inside the mall is not a second mall, so nothing takes its place."""
+    found = {"Yorkdale Mall": [
+        _feature("Yorkdale Mall", POINTS[0]),
+        _feature("Trade Secrets | Yorkdale Mall", POINTS[0]),
+    ]}
+    with pytest.raises(MapError, match="^place_not_found$"):
+        _stop(found, _one_stop("Yorkdale Mall", origin="Yorkdale Mall"))
+
+
+def test_a_stop_wanted_twice_is_not_the_start():
+    found = {"Tim Hortons": [
+        _feature("Tim Hortons", POINTS[0]),
+        _feature("Tim Hortons", [-79.392, 43.652]),
+        _feature("Tim Hortons", [-79.384, 43.652]),
+    ]}
+    trip = _two_stops().model_copy(update={"origin": "Tim Hortons"})
+    stops = [place.lon for place in maps._resolve(_Places({**ENDS, **found}), trip) if place.role == "stop"]
+    assert sorted(stops) == [-79.392, -79.384]
+
+
+def test_a_type_of_place_at_the_start_is_still_allowed():
+    """Coffee inside the station the trip starts from is a fair stop: it is not the station."""
+    trip = _trip("CN Tower", "Barrie Hall").model_copy(
+        update={"stops": [Stop(query="coffee", category="coffee", required=True, order=None)]}
+    )
+    assert _stop({None: [_feature("Union Coffee", POINTS[0])]}, trip).name == "Union Coffee"
