@@ -4,7 +4,10 @@
 # Written for this project with AI assistance (see eval/README.md, "AI use"); no code copied from other sources.
 """WP10 single command.
 
-    FIXTURES=replay uv run python -m eval.run_eval --all
+    FIXTURES=record uv run python -m eval.run_eval --all
+
+It makes live calls. FIXTURES=replay works only after a recorded run: without recorded replies every
+model call fails and the scores mean nothing.
 
 Writes eval/results/*.csv, each with the git commit hash and run_id, as listed in WP10.
 Steps that need code from other packages import it lazily. Until that code is merged the step
