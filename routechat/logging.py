@@ -38,8 +38,10 @@ import orjson
 
 from routechat.guards.input_guard import _mask_personal_data
 
-# P-06 sets deletion after 30 days. This is that decision, not a tuning knob.
+# P-06 sets deletion after 30 days, for log lines and support tickets. This is that decision, not a tuning knob.
 RETENTION_DAYS = 30
+# Several visitors share one process. A ticket added while the queue is pruned must not be lost.
+_queue_lock = threading.Lock()
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ADDRESS_RE = re.compile(
@@ -72,14 +74,20 @@ def mask_for_log(text: str) -> str:
     return _COORD_RE.sub(_round_coord, masked)
 
 
+def _mask_value(value: Any) -> Any:
+    """Mask every text inside a record. A ticket holds the trip, and its origin can be a street address."""
+    if isinstance(value, str):
+        return mask_for_log(value)
+    if isinstance(value, dict):
+        return {key: _mask_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_mask_value(item) for item in value]
+    return value
+
+
 def _clean_record(record: dict[str, Any]) -> dict[str, Any]:
-    clean: dict[str, Any] = {}
-    for key, value in record.items():
-        if isinstance(value, str) and key != "ts":
-            # The timestamp's fractional seconds would look like a coordinate to the mask.
-            clean[key] = mask_for_log(value)
-        else:
-            clean[key] = value
+    # The timestamp's fractional seconds would look like a coordinate to the mask.
+    clean = {key: value if key == "ts" else _mask_value(value) for key, value in record.items()}
     clean.setdefault("ts", datetime.now(timezone.utc).isoformat())
     run_id = os.environ.get("RUN_ID")
     if run_id:
@@ -105,9 +113,8 @@ def prune_expired(path: Path | None = None, *, now: datetime | None = None) -> N
         return
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=RETENTION_DAYS)
     kept: list[bytes] = []
-    for raw in target.read_bytes().splitlines():
-        if not raw.strip():
-            continue
+    lines = [raw for raw in target.read_bytes().splitlines() if raw.strip()]
+    for raw in lines:
         try:
             record = orjson.loads(raw)
             stamp = datetime.fromisoformat(record["ts"])
@@ -118,25 +125,32 @@ def prune_expired(path: Path | None = None, *, now: datetime | None = None) -> N
             stamp = stamp.replace(tzinfo=timezone.utc)
         if stamp >= cutoff:
             kept.append(raw)
+    if len(kept) == len(lines):
+        return
     body = b"\n".join(kept)
     target.write_bytes(body + (b"\n" if body else b""))
 
 
 def append_handoff(ticket: dict[str, Any]) -> None:
-    """Add one support ticket. The request text is masked before it is stored."""
+    """Add one support ticket, masked, and drop the ones past the retention period."""
     path = handoff_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = orjson.dumps(_clean_record(ticket)).decode("utf-8")
-    with path.open("ab") as handle:
-        handle.write(line.encode("utf-8") + b"\n")
+    line = orjson.dumps(_clean_record(ticket))
+    with _queue_lock:
+        with path.open("ab") as handle:
+            handle.write(line + b"\n")
+        prune_expired(path)
 
 
 def read_handoffs() -> list[dict[str, Any]]:
     path = handoff_path()
     if not path.exists():
         return []
+    with _queue_lock:
+        prune_expired(path)
+        body = path.read_bytes()
     tickets: list[dict[str, Any]] = []
-    for raw in path.read_bytes().splitlines():
+    for raw in body.splitlines():
         if raw.strip():
             tickets.append(orjson.loads(raw))
     return tickets
