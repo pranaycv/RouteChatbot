@@ -15,7 +15,7 @@ parse_error = true. A bad output can never produce a route. After parsing, two n
 rules apply and each correction is logged so it can be counted.
 
 Graph entry points: classify_node(state) -> {"classification": ...}, or classify(turn).
-Prompts: prompts/label_guide_v1.md (system) and prompts/classifier_fewshot_v1.jsonl (examples).
+Prompts: prompts/label_guide_v<N>.md (system; see prompt_version()) and prompts/classifier_fewshot_v1.jsonl (examples).
 WP9's finetune/prepare.py imports build_messages and labels_json so training data is byte-identical
 to what this module sends at runtime (test T-9-01).
 """
@@ -36,8 +36,24 @@ from routechat.config import ROOT, get_settings
 from routechat.llm import api_calls_for, log_stage
 from routechat.schemas import ConstraintSet, RouteClassification, UserTurn
 
-PROMPT_VERSION = "label_guide_v1"
-LABEL_GUIDE_PATH = ROOT / "prompts" / f"{PROMPT_VERSION}.md"
+# v2 (23 Nov): transit is refused with out_of_scope_mode, matching D1 and schemas v1.1.
+# v3 (23 Nov): the WP8 label guide the D1 labels were adjudicated and relabelled with (escalate triggers,
+# replan for any blocked-or-alternative request, lookup_only for any fact question, replan before clarify).
+# CLASSIFIER_PROMPT_VERSION overrides the default; a fine-tuned adapter pins the version it was trained with
+# (prompt_version.txt next to its weights), so training and serving never drift.
+DEFAULT_PROMPT_VERSION = "label_guide_v4"
+PROMPT_VERSION = DEFAULT_PROMPT_VERSION  # the module constant some callers read; prompt_version() is authoritative
+
+
+def prompt_version() -> str:
+    return os.environ.get("CLASSIFIER_PROMPT_VERSION") or DEFAULT_PROMPT_VERSION
+
+
+def label_guide_path(version: str) -> Path:
+    return ROOT / "prompts" / f"{version}.md"
+
+
+LABEL_GUIDE_PATH = label_guide_path(DEFAULT_PROMPT_VERSION)
 FEWSHOT_PATH = ROOT / "prompts" / "classifier_fewshot_v1.jsonl"
 BACKEND_NAMES = ("ft", "base", "prompted_small", "prompted_large")
 DEFAULT_BACKEND = "prompted_small"
@@ -45,9 +61,9 @@ STAGE = "classify"
 RETRY_HINT = "That was not a valid answer. Reply with only the JSON object with the five keys and allowed values."
 
 
-@lru_cache(maxsize=1)
-def load_label_guide() -> str:
-    return LABEL_GUIDE_PATH.read_text(encoding="utf-8")
+@lru_cache(maxsize=8)
+def load_label_guide(version: str = DEFAULT_PROMPT_VERSION) -> str:
+    return label_guide_path(version).read_text(encoding="utf-8")
 
 
 @lru_cache(maxsize=1)
@@ -71,9 +87,10 @@ def labels_json(classification: RouteClassification) -> str:
     return classification.model_dump_json(exclude={"parse_error"})
 
 
-def build_messages(turn: UserTurn, include_examples: bool) -> list[Message]:
-    """System: the label guide. Optional few-shot pairs. User: the serialised turn."""
-    messages: list[Message] = [{"role": "system", "content": load_label_guide()}]
+def build_messages(turn: UserTurn, include_examples: bool, version: str | None = None) -> list[Message]:
+    """System: the label guide (the given version, else CLASSIFIER_PROMPT_VERSION or the default).
+    Optional few-shot pairs. User: the serialised turn."""
+    messages: list[Message] = [{"role": "system", "content": load_label_guide(version or prompt_version())}]
     if include_examples:
         for example_turn, example_labels in load_fewshot():
             messages.append({"role": "user", "content": serialize_turn(example_turn)})
@@ -185,7 +202,9 @@ def classify(turn: UserTurn, backend: Backend | None = None, request_id: str = "
     """Classify one turn: generate, parse, retry once, normalise, log."""
     started = time.perf_counter()
     backend = backend or resolve_backend()
-    messages = build_messages(turn, include_examples=backend.uses_examples)
+    # An adapter was trained on one guide version and must be served with it; other backends take the current one.
+    version = getattr(backend, "prompt_version", None) or prompt_version()
+    messages = build_messages(turn, include_examples=backend.uses_examples, version=version)
 
     first: GenResult = backend.generate(messages)
     tokens_in, tokens_out, cost = first.tokens_in, first.tokens_out, first.cost_usd
@@ -221,7 +240,7 @@ def classify(turn: UserTurn, backend: Backend | None = None, request_id: str = "
         round(cost, 8),
         api_calls,
         model=f"{backend.name}:{backend.model}",
-        prompt_version=PROMPT_VERSION,
+        prompt_version=version,
         error_type=error_type,
         extra={"retries": calls - 1, "corrections": corrections, "parse_error": classification.parse_error},
     )

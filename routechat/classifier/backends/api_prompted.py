@@ -13,6 +13,7 @@ from routechat.llm import complete
 
 class PromptedBackend:
     uses_examples = True
+    prompt_version = None  # always the current label guide
 
     def __init__(self, name: str, model: str, temperature: float, max_new_tokens: int) -> None:
         self.name = name

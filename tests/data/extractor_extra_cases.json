@@ -4,7 +4,7 @@
     "clean_text": "Drive from Union Station to the Ontario Science Centre and stop at a Canadian Tire, a Shoppers, an LCBO and a Tim Hortons on the way.",
     "classification": {"route_action": "plan", "primary_mode": "car", "needs_live_data": false, "clarify_field": "none", "refusal_reason": "none"},
     "known": null,
-    "model_output": {"origin": "Union Station", "destination": "the Ontario Science Centre", "stops": [{"query": "Canadian Tire", "category": null, "required": true, "order": null}, {"query": "Shoppers", "category": null, "required": true, "order": null}, {"query": "LCBO", "category": null, "required": true, "order": null}, {"query": "Tim Hortons", "category": null, "required": true, "order": null}], "mode": "car", "modes_to_compare": [], "compare_threshold_min": null, "avoid": [], "prefer": [], "minimize_elevation": false, "check_closures": false, "max_duration_min": null, "max_distance_km": null, "loop": false, "target_distance_km": null, "depart_at": null, "arrive_by": null, "required_accessibility": false, "ambiguities": [], "missing_field": null, "too_many_stops": false}
+    "model_output": {"origin": "Union Station", "destination": "Ontario Science Centre", "stops": [{"query": "Canadian Tire", "category": null, "required": true, "order": null}, {"query": "Shoppers", "category": null, "required": true, "order": null}, {"query": "LCBO", "category": null, "required": true, "order": null}, {"query": "Tim Hortons", "category": null, "required": true, "order": null}], "mode": "car", "modes_to_compare": [], "compare_threshold_min": null, "avoid": [], "prefer": [], "minimize_elevation": false, "check_closures": false, "max_duration_min": null, "max_distance_km": null, "loop": false, "target_distance_km": null, "depart_at": null, "arrive_by": null, "required_accessibility": false, "ambiguities": [], "missing_field": null, "too_many_stops": false}
   },
   {
     "id": "mode_from_classifier_and_loop_without_length",
@@ -15,7 +15,7 @@
   },
   {
     "id": "arrive_before_depart",
-    "clean_text": "Leave Union Station at 11 pm and get me to Pearson Airport by 1.",
+    "clean_text": "Leave Union Station at 11 pm and get me to Pearson Airport by 1 am.",
     "classification": {"route_action": "plan", "primary_mode": "car", "needs_live_data": true, "clarify_field": "none", "refusal_reason": "none"},
     "known": null,
     "model_output": {"origin": "Union Station", "destination": "Pearson Airport", "stops": [], "mode": "car", "modes_to_compare": [], "compare_threshold_min": null, "avoid": [], "prefer": [], "minimize_elevation": false, "check_closures": false, "max_duration_min": null, "max_distance_km": null, "loop": false, "target_distance_km": null, "depart_at": "23:00", "arrive_by": "01:00", "required_accessibility": false, "ambiguities": [], "missing_field": null, "too_many_stops": false}

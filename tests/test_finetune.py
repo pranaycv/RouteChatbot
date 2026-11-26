@@ -13,7 +13,9 @@ import pytest
 
 from finetune import prepare
 from finetune import select_checkpoint as select
+from finetune import train
 from finetune.train import effective_settings, load_ft_config
+from routechat.classifier import predict
 from routechat.classifier.predict import adapter_dir, build_messages, labels_json
 from routechat.schemas import RouteClassification, UserTurn
 
@@ -69,14 +71,42 @@ def test_train_dry_run_reads_config_and_overrides(tmp_path):
     assert summary["train_records"] == 8 and summary["settings"]["lora"]["r"] == 8
     assert summary["settings"]["sft"]["learning_rate"] == 1e-4 and summary["settings"]["sft"]["seed"] == 42
     assert summary["settings"]["base_model"].startswith("Qwen/")
+    # The guide name comes from the marker prepare.py wrote next to the data, not from the setting at training time.
+    marker = tmp_path / "prompt_version.txt"
+    assert marker.read_text(encoding="utf-8").strip() == summary["prompt_version"] == predict.prompt_version()
+    assert "longest_record_tokens" in summary  # None when the tokenizer is not cached offline
+    marker.write_text("label_guide_v2\n", encoding="utf-8")
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, env={**os.environ, "PYTHONPATH": str(ROOT)})
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["prompt_version"] == "label_guide_v2"
+
+
+def test_prepare_refuses_to_mix_guides_in_one_data_folder(tmp_path, monkeypatch):
+    prepare.convert(FEWSHOT, tmp_path / "train.jsonl")
+    (tmp_path / "prompt_version.txt").write_text("label_guide_v2\n", encoding="utf-8")
+    monkeypatch.setenv("CLASSIFIER_PROMPT_VERSION", "label_guide_v3")
+    with pytest.raises(SystemExit, match="same guide"):
+        prepare.convert(FEWSHOT, tmp_path / "val.jsonl")
+
+
+def test_guide_markers_land_in_run_final_and_every_checkpoint(tmp_path):
+    for name in ("checkpoint-50", "checkpoint-100", "final", "not-a-checkpoint"):
+        (tmp_path / name).mkdir()
+    written = train.write_guide_markers(tmp_path, "label_guide_v3")
+    assert sorted(p.parent.name for p in written) == sorted(["checkpoint-100", "checkpoint-50", "final", tmp_path.name])
+    assert (tmp_path / "checkpoint-50" / "prompt_version.txt").read_text(encoding="utf-8").strip() == "label_guide_v3"
+    assert not (tmp_path / "not-a-checkpoint" / "prompt_version.txt").exists()
 
 
 def test_handbook_settings_are_in_config():
     cfg = load_ft_config()
     assert cfg["lora"] == {"r": 16, "lora_alpha": 32, "lora_dropout": 0.05, "target_modules": "all-linear", "task_type": "CAUSAL_LM"}
     sft = cfg["sft"]
-    assert (sft["num_train_epochs"], sft["per_device_train_batch_size"], sft["gradient_accumulation_steps"]) == (3, 4, 2)
-    assert (sft["learning_rate"], sft["lr_scheduler_type"], sft["warmup_ratio"], sft["max_length"]) == (2e-4, "cosine", 0.05, 512)
+    # Effective batch 8 as the handbook (4 x 2), split 1 x 8 for records of up to ~2,600 tokens; max_length 3072
+    # covers the longest record under the default guide (v4: 2,629) and the handbook's 512 would drop every completion.
+    assert sft["num_train_epochs"] == 3
+    assert sft["per_device_train_batch_size"] * sft["gradient_accumulation_steps"] == 8
+    assert (sft["learning_rate"], sft["lr_scheduler_type"], sft["warmup_ratio"], sft["max_length"]) == (2e-4, "cosine", 0.05, 3072)
     assert sft["fp16"] is True and sft["eval_steps"] == 50 and sft["save_steps"] == 50 and cfg["seed"] == 42
     assert cfg["sweep"] == {"r": [8, 16], "learning_rate": [1e-4, 2e-4]}
     assert cfg["learning_curve"]["sizes"] == [200, 400, 800, 1600]

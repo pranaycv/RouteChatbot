@@ -11,6 +11,10 @@ Accepted D1 line shapes (WP8 may use either):
   {"id": ..., "turn": {"utterance", "turn_index", "known"}, "labels": {five labels}}
   {"id": ..., "utterance": ..., "turn_index": ..., "known": ..., "route_action": ..., ...five labels flat...}
 No torch needed; this runs in the core environment.
+
+Next to the output it writes prompt_version.txt, the label guide the prompts embed. train.py reads that file
+(not the setting at training time) and copies it into the run folder, final/ and every checkpoint, so an
+adapter is always served and selected with the guide it was trained on.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from routechat.classifier.predict import build_messages, labels_json  # noqa: E402
+from routechat.classifier.predict import build_messages, labels_json, prompt_version  # noqa: E402
 from routechat.schemas import RouteClassification, UserTurn  # noqa: E402
 
 LABEL_KEYS = ("route_action", "primary_mode", "needs_live_data", "clarify_field", "refusal_reason")
@@ -58,7 +62,23 @@ def convert(in_path: Path, out_path: Path, limit: int | None = None) -> int:
             n += 1
             if limit is not None and n >= limit:
                 break
+    write_guide_marker(out_path.parent)
     return n
+
+
+def write_guide_marker(folder: Path) -> Path:
+    """prompt_version.txt in the data folder: the label guide every record in it embeds. train and val must agree."""
+    marker = folder / "prompt_version.txt"
+    version = prompt_version()
+    if marker.exists():
+        previous = marker.read_text(encoding="utf-8").strip()
+        if previous and previous != version:
+            raise SystemExit(
+                f"{marker} says {previous} but the current label guide is {version}: prepare train and val with the "
+                "same guide (CLASSIFIER_PROMPT_VERSION), or delete the marker and prepare both again"
+            )
+    marker.write_text(version + "\n", encoding="utf-8")
+    return marker
 
 
 def main() -> None:

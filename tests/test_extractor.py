@@ -1,8 +1,8 @@
 """WP3 extractor tests: T-3-01 through T-3-10, plus the retry path and the code-side rules.
 
 All model calls run with FIXTURES=replay against routechat/fixtures/llm. The fixtures are seeded by
-scripts/llm_fixtures.py (synthetic until a key exists, then recorded live). The six worked examples
-come straight from prompts/extractor_v1.md, so the prompt is the single source of truth.
+scripts/llm_fixtures.py (synthetic until a key exists, then recorded live). The eight worked examples
+come straight from the default prompt (prompts/extractor_v<N>.md), so the prompt is the single source of truth.
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ def _run(case: dict) -> ConstraintSet:
     return extract(case["clean_text"], case["classification"], case["known"], request_id=case["id"])
 
 
-def test_prompt_has_six_worked_examples():
-    assert len(EXAMPLES) == 6
+def test_prompt_has_eight_worked_examples():
+    assert len(EXAMPLES) == 8
     assert [e["title"] for e in prompt_examples()] == [
         "the running example",
         "a loop",
@@ -46,10 +46,12 @@ def test_prompt_has_six_worked_examples():
         "a replan",
         "a vague request",
         "two trips in one message",
+        "the origin comes late, and an afterthought is not a stop",
+        "a loop through one place, with a wish that is not a stop",
     ]
 
 
-@pytest.mark.parametrize("n", range(1, 7))
+@pytest.mark.parametrize("n", range(1, 9))
 def test_T_3_01_to_06_examples_round_trip(n):
     """Each worked example comes back as the OUTPUT the prompt shows, with the two code-set fields recomputed."""
     case = EXAMPLES[f"example_{n}"]
@@ -113,11 +115,11 @@ def test_postprocess_flags_arrive_before_depart():
 
 def test_postprocess_dedupes_lists_and_clips_compare_modes():
     shown = ConstraintSet.model_validate(EXAMPLES["example_3"]["model_output"])
-    messy = shown.model_copy(update={"avoid": ["tolls", "tolls", "highways"], "prefer": ["scenic", "scenic"], "modes_to_compare": ["walk", "transit", "bike"]})
+    messy = shown.model_copy(update={"avoid": ["tolls", "tolls", "highways"], "prefer": ["scenic", "scenic"], "modes_to_compare": ["walk", "bike", "car"]})
     fixed = postprocess(messy, _cls(EXAMPLES["example_3"]))
     assert fixed.avoid == ["tolls", "highways"]
     assert fixed.prefer == ["scenic"]
-    assert fixed.modes_to_compare == ["walk", "transit"]
+    assert fixed.modes_to_compare == ["walk", "bike"]
 
 
 def test_two_validation_failures_give_unparseable(monkeypatch):
@@ -168,4 +170,4 @@ def test_log_line_matches_wp10_schema(caplog):
     lines = [json.loads(r.message) for r in caplog.records if r.name == "routechat.extract"]
     assert lines, "no log line written"
     assert validate_line(lines[-1]) == []
-    assert lines[-1]["decision"] == "complete" and lines[-1]["prompt_version"] == "extractor_v1"
+    assert lines[-1]["decision"] == "complete" and lines[-1]["prompt_version"] == extractor.prompt_version()

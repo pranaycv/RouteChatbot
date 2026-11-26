@@ -26,5 +26,6 @@ class Backend(Protocol):
     name: str
     model: str
     uses_examples: bool
+    prompt_version: str | None  # a fine-tuned adapter pins the label guide it was trained with; None = current
 
     def generate(self, messages: list[Message]) -> GenResult: ...

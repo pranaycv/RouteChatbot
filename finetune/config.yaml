@@ -12,13 +12,23 @@ lora:
 
 sft:
   num_train_epochs: 3
-  per_device_train_batch_size: 4
-  gradient_accumulation_steps: 2
+  # Effective batch 8, as the handbook's 4 x 2. Split 1 x 8 because each record is ~1,500 tokens
+  # (the label guide alone is 1,430) and the loss over Qwen's 152k-token vocabulary materialises
+  # ~1.2 GB of logits per sequence; 2 x 4 filled a 10 GB card and spilled into shared memory.
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  per_device_eval_batch_size: 1   # the Trainer default of 8 would need ~10 GB of eval logits at once
   learning_rate: 2.0e-4
   lr_scheduler_type: cosine
   warmup_ratio: 0.05
-  max_length: 512
-  fp16: true            # the Kaggle T4 has no bf16
+  # Must cover the longest D1 training record under the default label guide (train.py measures it and
+  # stops if not): 1,681 tokens with guide v2, 2,202 with v3, 2,629 with v4. 3072 leaves room; the v2
+  # adapter trained at 2048 and the v3 adapter at 2304 (--max-length). The handbook's 512 predates the
+  # label guide and would truncate away every completion.
+  max_length: 3072
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: {use_reentrant: false}
+  fp16: true            # the Kaggle T4 has no bf16; train.py --bf16 switches this for an Ampere GPU
   eval_strategy: steps
   eval_steps: 50
   save_steps: 50
