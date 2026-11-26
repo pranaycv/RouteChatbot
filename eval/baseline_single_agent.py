@@ -10,8 +10,9 @@ verifier, writer or guard. We score it on D2 the same way as the pipeline:
 
   - outcome against D2's expected_outcome (P-09 counts a "not covered" refusal of hike/transit as right)
   - for accepts, the D2 gold requirements checked on the route the agent chose, with the verifier's own
-    checks (highways, bike lanes, flatness, distance, time, loop length); a required stop counts as met
-    when a stop on the route has a name close to the gold stop (the agent names places its own way)
+    checks (highways, bike lanes, flatness, distance, time, loop length); a required named stop counts as
+    met when a stop on the route has a name close to the gold stop (the agent names places its own way),
+    and a required kind of stop (lunch, coffee, ...) when the agent searched for that kind (_KIND_WORDS)
 
     FIXTURES=record RUN_ID=baseline uv run python -m eval.baseline_single_agent        # live, saves replies
     FIXTURES=replay RUN_ID=baseline uv run python -m eval.baseline_single_agent        # free rerun
@@ -157,8 +158,32 @@ def _close(a: str, b: str) -> bool:
     return bool(a and b) and (a in b or b in a or SequenceMatcher(None, a, b).ratio() >= 0.75)
 
 
+# Words that show a stop on the route is of a D2 kind (D2's required stops are mostly kinds, such as lunch).
+# A kind stop counts as met when the agent searched for it with one of these words, or the place's name has one
+# (a search for "Starbucks" is a coffee stop). Kinds not listed here match by their own name.
+_KIND_WORDS = {
+    "lunch": ("lunch", "restaurant", "food", "eat", "meal", "diner", "bistro", "pizza", "burger", "sandwich", "pub"),
+    "coffee": ("coffee", "cafe", "café", "espresso", "tim hortons", "starbucks", "second cup", "bakery"),
+    "viewpoint": ("viewpoint", "lookout", "view", "overlook", "scenic", "vista"),
+    "ev_charging_station": ("charger", "charging", "ev ", "electric vehicle", "supercharger", "flo ", "chargepoint"),
+    "grocery": ("grocery", "groceries", "supermarket", "market", "loblaws", "metro", "sobeys", "no frills", "walmart"),
+    "bank": ("bank", "atm", "rbc", "td ", "scotiabank", "bmo", "cibc", "desjardins"),
+    "pharmacy": ("pharmacy", "drugstore", "drug mart", "rexall", "jean coutu", "pharmaprix"),
+    "playground": ("playground", "play area", "splash pad"),
+}
+
+
+def _is_kind(category: str, place) -> bool:
+    words = _KIND_WORDS.get(category) or (category.replace("_", " "),)
+    text = f" {place.query or ''} {place.name or ''} ".casefold()
+    return any(word in text for word in words)
+
+
 def hard_requirements_met(gold: dict, route, places) -> bool:
-    """D2 gold requirements on the agent's route, with the verifier's own checks. Stops by name (see top)."""
+    """D2 gold requirements on the agent's route, with the verifier's own checks.
+
+    A named stop is met when a stop on the route has a close name. A kind of stop (lunch, coffee, ...) is met
+    when a stop on the route was searched for as that kind or is named as one (_KIND_WORDS)."""
     from routechat.verify.decide import _checks
     cons = ConstraintSet.model_validate({**gold, "stops": []})
     cls = RouteClassification(route_action="plan", primary_mode=gold.get("mode") or "unspecified",
@@ -166,11 +191,15 @@ def hard_requirements_met(gold: dict, route, places) -> bool:
     checks = list(_checks(cons, places, route, cls))
     hard_ok = all(c.status == "met" for c in checks if c.hard)
     on_route = route.stops_in_order[1:-1]
+    stops = places[1:-1]
     for stop in gold.get("stops") or []:
-        if stop.get("required"):
-            names = [stop.get("query") or ""] + ([stop["category"]] if stop.get("category") else [])
-            if not any(_close(n, s) for n in names for s in on_route):
-                hard_ok = False
+        if not stop.get("required"):
+            continue
+        if stop.get("category"):
+            met = any(_is_kind(stop["category"], place) for place in stops)
+        else:
+            met = any(_close(stop.get("query") or "", s) for s in on_route)
+        hard_ok = hard_ok and met
     return hard_ok
 
 

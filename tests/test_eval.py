@@ -345,3 +345,12 @@ def test_T_10_20_single_agent_baseline_offline(monkeypatch):
     assert not b.hard_requirements_met({**gold, "max_duration_min": 2}, *out["route"])
     assert not b.hard_requirements_met({**gold, "stops": [{"query": "Canadian Tire", "category": None,
                                                            "required": True, "order": 1}]}, *out["route"])
+    # A kind of stop (most of D2's required stops) is met by a stop the agent searched for as that kind.
+    route, places = out["route"]
+    cafe = places[0].model_copy(update={"role": "stop", "query": "coffee shop near King", "name": "Balzac's"})
+    lunch = {"query": "lunch", "category": "lunch", "required": True, "order": 1}
+    coffee = {"query": "coffee", "category": "coffee", "required": True, "order": 1}
+    with_cafe = [places[0], cafe, places[-1]]
+    assert b.hard_requirements_met({**gold, "stops": [coffee]}, route, with_cafe)
+    assert not b.hard_requirements_met({**gold, "stops": [lunch]}, route, with_cafe)
+    assert not b.hard_requirements_met({**gold, "stops": [coffee]}, route, places)   # no stop on the route
