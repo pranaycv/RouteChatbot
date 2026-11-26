@@ -6,13 +6,13 @@ Two ways to run `kaggle_train.ipynb` on a free Kaggle T4. Both read D1 from the 
 
 1. kaggle.com, Create, New Notebook, File, Import Notebook, upload `finetune/kaggle_train.ipynb`.
 2. Settings on the right: Accelerator GPU T4 x1, Internet On.
-3. In the first code cell set `BRANCH` to `main` (after the PR is merged) or `stage/classifier-v2` (before).
+3. In the first code cell set `BRANCH` to `main`.
 4. Run All. One run (3 epochs over 1,407 records) took 1.97 GPU-hours on a Kaggle T4 on 24 Nov (about $0.69 at $0.35/h) and 1.4 hours on an RTX 3080; the sweep and the learning curve are four runs each.
 5. When it finishes, download `/kaggle/working/routechatbot_adapter.zip` from the Output panel, and note the GPU hours and cost printed by the last cell.
 
 ## B. From the command line (Kaggle API)
 
-1. kaggle.com, Settings, API, Create New Token. Save the downloaded `kaggle.json` to `C:\Users\<you>\.kaggle\kaggle.json`.
+1. kaggle.com, Settings, API, Create New Token. Save the downloaded `kaggle.json` to `~/.kaggle/kaggle.json` on a Mac or Linux, or `C:\Users\<you>\.kaggle\kaggle.json` on Windows.
 2. Put your Kaggle username in `finetune/kernel-metadata.json` in place of `KAGGLE_USERNAME`.
 3. From the repository root:
 

@@ -33,3 +33,6 @@ data/d1/unused.jsonl
 data/d1/review.csv
 data/d1/test_review.csv
 data_gen/review/
+
+# Training records made by finetune/prepare.py (WP9)
+finetune/data/
