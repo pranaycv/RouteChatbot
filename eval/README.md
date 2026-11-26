@@ -20,7 +20,7 @@ This branch only adds new files. It does not change any file owned by another pa
 | `eval/route_review.py`, `report/route_review_instructions.md` | Sheet for the 50 manual route inspections, then the false-met rate and `d2_truth.csv` for trip success. |
 | `eval/baseline_single_agent.py` | Single-agent baseline: one LLM with the two map tools, scored on D2 like the pipeline (criterion 8). |
 | `eval/final_run.sh` | The final run in order: tests, all eval steps with the judge, then the cost model. |
-| `tests/test_eval.py` | T-10-01 to T-10-20 and T-11-01 to T-11-06, offline. |
+| `tests/test_eval.py` | T-10-01 to T-10-20 and T-11-01 to T-11-07, offline. |
 
 ```bash
 FIXTURES=replay uv run pytest                     # all tests, WP0's and these
