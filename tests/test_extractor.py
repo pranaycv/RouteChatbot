@@ -2,7 +2,7 @@
 
 All model calls run with FIXTURES=replay against routechat/fixtures/llm. The fixtures are seeded by
 scripts/llm_fixtures.py (synthetic until a key exists, then recorded live). The eight worked examples
-come straight from prompts/extractor_v1.md, so the prompt is the single source of truth.
+come straight from the default prompt (prompts/extractor_v<N>.md), so the prompt is the single source of truth.
 """
 
 from __future__ import annotations

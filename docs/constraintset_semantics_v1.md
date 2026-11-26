@@ -48,7 +48,7 @@ The ConstraintSet is the form the extractor fills in from the user's message. Ma
 ## Special cases, from the handbook
 
 - Personal places ("home", "my office", "my university") become null plus an ambiguity. The pilot stores no saved places.
-- A generic stop ("a coffee shop") becomes query = "coffee", category = "coffee".
+- A generic stop ("a coffee shop") becomes query = "coffee", category = "coffee". The type words, agreed with WP4 and WP8 on 25 Nov so D2, the extractor and the map layer share one vocabulary: coffee, lunch, grocery, pharmacy, bank, playground, viewpoint, ev_charging_station. The map layer translates them to Mapbox's IDs where they differ (lunch to restaurant, ev_charging_station to charging_station). A kind of place outside the list keeps the user's word.
 - Scenic, countryside or quiet words add `scenic` and `quiet_roads` to prefer.
 - Two trips in one message: extract the first only, add an ambiguity naming the second.
 - Replan (turn 2): return the full merged trip. Start from the earlier ConstraintSet, change only what the user changed. "Skip the Canadian Tire" removes that stop and keeps everything else.

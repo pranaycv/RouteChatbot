@@ -30,7 +30,7 @@ from routechat.schemas import ConstraintSet, RouteClassification
 # asks to stop, no leading article or "entrance to" on place names (prompts/CHANGELOG.md has the D2 numbers).
 # EXTRACTOR_PROMPT_VERSION overrides the default, so scripts/extractor_eval.py can score a new version without
 # changing what the app serves.
-DEFAULT_PROMPT_VERSION = "extractor_v2"
+DEFAULT_PROMPT_VERSION = "extractor_v3"
 PROMPT_VERSION = DEFAULT_PROMPT_VERSION  # the module constant some callers read; prompt_version() is authoritative
 
 
