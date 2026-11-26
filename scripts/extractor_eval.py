@@ -15,7 +15,8 @@ sets; exact match of the whole form; invented-value rate, the share of records w
 destination or a stop query is a place string that does not occur in the text or in known;
 latency and cost from the stage log.
 
-Outputs: eval/results/extractor.csv (one row per model variant) and
+Outputs: eval/results/extractor_ablation.csv (one row per model variant; eval/run_eval.py writes its own
+extractor.csv with different columns, so the two never overwrite each other) and
 eval/results/extractor_predictions.jsonl (every prediction next to its gold, for error analysis).
 Runs with FIXTURES=record so a rerun replays what was already paid for.
 
@@ -217,7 +218,7 @@ def main() -> None:
     ap.add_argument("--reasoning-model", default="gpt-5-mini")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--d2", type=Path, default=D2)
-    ap.add_argument("--append", action="store_true", help="merge into the existing extractor.csv and predictions (keyed by variant and prompt_version) instead of overwriting")
+    ap.add_argument("--append", action="store_true", help="merge into the existing extractor_ablation.csv and predictions (keyed by variant and prompt_version) instead of overwriting")
     a = ap.parse_args()
 
     if not a.d2.exists():
@@ -259,7 +260,7 @@ def main() -> None:
 
     df = pd.DataFrame(rows)
     df["prompt_version"] = version
-    out = RESULTS / "extractor.csv"
+    out = RESULTS / "extractor_ablation.csv"
     if a.append and out.exists():
         old = pd.read_csv(out)
         if "prompt_version" not in old.columns:
@@ -268,7 +269,7 @@ def main() -> None:
         old = old[[k not in keys for k in zip(old.variant, old.prompt_version)]]
         df = pd.concat([old, df], ignore_index=True)
     df.to_csv(out, index=False)
-    print(f"wrote {RESULTS / 'extractor.csv'} ({len(df)} rows) and extractor_predictions.jsonl")
+    print(f"wrote {out} ({len(df)} rows) and extractor_predictions.jsonl")
 
 
 if __name__ == "__main__":

@@ -89,6 +89,11 @@ def evaluate_checkpoint(checkpoint: Path, val: list[dict]) -> dict:
     from routechat.schemas import UserTurn
 
     cfg = get_settings().classifier
+    marker = checkpoint / "prompt_version.txt"
+    if not marker.exists() and (checkpoint.parent / "prompt_version.txt").exists():
+        # Runs from before 25 Nov wrote the guide name only at the top of the run folder; LocalBackend reads it
+        # next to the weights, so copy it down or the checkpoint would be scored with the current default guide.
+        shutil.copy(checkpoint.parent / "prompt_version.txt", marker)
     backend = LocalBackend(f"ckpt:{checkpoint.name}", cfg.base_model, checkpoint, cfg.max_new_tokens)
     preds = []
     for row in val:

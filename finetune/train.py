@@ -11,7 +11,10 @@ saved every eval_steps; finetune/select_checkpoint.py then picks the one with th
 validation. Never pass the test set here.
 
 Outputs in --out: checkpoint-*/ (adapter weights per save), final/ (last adapter), train_log.json
-(loss and eval loss per step), run.json (settings, record counts, elapsed seconds, GPU hours).
+(loss and eval loss per step), run.json (settings, record counts, elapsed seconds, GPU hours), and
+prompt_version.txt in the run folder, in final/ and in every checkpoint: the label guide the prepared
+records embed, read from the marker prepare.py wrote next to the data, so select_checkpoint.py and
+predict.py use the same guide the adapter was trained with.
 """
 
 from __future__ import annotations
@@ -70,12 +73,66 @@ def effective_settings(args: argparse.Namespace, cfg: dict, n_train: int) -> dic
     return {"base_model": base_model_name(), "lora": lora, "sft": sft, "warmup_ratio": warmup_ratio, "subset": args.subset}
 
 
+def data_prompt_version(train_path: Path) -> tuple[str, str]:
+    """The label guide the prepared records embed: prepare.py's prompt_version.txt next to them. Older data
+    without the marker falls back to the current setting, and says so."""
+    from routechat.classifier.predict import prompt_version
+
+    marker = train_path.parent / "prompt_version.txt"
+    if marker.exists() and marker.read_text(encoding="utf-8").strip():
+        version = marker.read_text(encoding="utf-8").strip()
+        if version != prompt_version():
+            print(f"note: the prepared data embeds {version}; the current setting is {prompt_version()}. The data wins.", file=sys.stderr)
+        return version, str(marker)
+    return prompt_version(), "current setting (no prompt_version.txt next to the data; finetune/prepare.py writes it)"
+
+
+def write_guide_markers(out_dir: Path, version: str) -> list[Path]:
+    """prompt_version.txt in the run folder, final/ and every checkpoint-*/ that exists."""
+    folders = [out_dir] + [p for p in [out_dir / "final", *sorted(out_dir.glob("checkpoint-*"))] if p.is_dir()]
+    written = []
+    for folder in folders:
+        marker = folder / "prompt_version.txt"
+        marker.write_text(version + "\n", encoding="utf-8")
+        written.append(marker)
+    return written
+
+
+def longest_record_tokens(train_path: Path, base_model: str) -> int | None:
+    """Longest prompt + completion in tokens with the chat template applied, or None when the tokenizer is not
+    available offline (the dry run never downloads)."""
+    try:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(base_model, local_files_only=True)
+    except Exception:
+        return None
+    longest = 0
+    with train_path.open(encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                r = json.loads(line)
+                longest = max(longest, len(tokenizer(tokenizer.apply_chat_template(r["prompt"] + r["completion"], tokenize=False))["input_ids"]))
+    return longest
+
+
 def train(args: argparse.Namespace) -> dict:
     cfg = load_ft_config()
     n_train, n_val = count_records(args.train), count_records(args.val)
     settings = effective_settings(args, cfg, min(n_train, args.subset) if args.subset else n_train)
-    summary = {"settings": settings, "train_records": n_train, "val_records": n_val, "out": str(args.out)}
+    version, version_source = data_prompt_version(args.train)
+    summary = {
+        "settings": settings, "train_records": n_train, "val_records": n_val, "out": str(args.out),
+        "prompt_version": version, "prompt_version_source": version_source,
+    }
     if args.dry_run:
+        # The same check the training path makes, so the notebook sees a too-small max_length before it rents a GPU.
+        longest = longest_record_tokens(args.train, settings["base_model"])
+        summary["longest_record_tokens"] = longest
+        if longest is None:
+            summary["longest_record_tokens_note"] = "tokenizer not cached offline; train.py measures before training"
+        elif longest > int(settings["sft"]["max_length"]):
+            summary["warning"] = f"longest training record is {longest} tokens but max_length is {settings['sft']['max_length']}; training will stop"
         print(json.dumps(summary, indent=2))
         return summary
 
@@ -129,17 +186,28 @@ def train(args: argparse.Namespace) -> dict:
     sft = SFTConfig(output_dir=str(args.out), **settings["sft"])
     trainer = SFTTrainer(model=model, args=sft, train_dataset=data["train"], eval_dataset=data["validation"], processing_class=tokenizer, peft_config=lora)
 
+    from transformers import TrainerCallback
+
+    class GuideMarker(TrainerCallback):
+        """prompt_version.txt into each checkpoint as it is saved, so an interrupted run leaves no checkpoint without it."""
+
+        def on_save(self, args_, state, control, **kwargs):
+            folder = Path(args_.output_dir) / f"checkpoint-{state.global_step}"
+            if folder.is_dir():
+                (folder / "prompt_version.txt").write_text(version + "\n", encoding="utf-8")
+            return control
+
+    trainer.add_callback(GuideMarker())
+
     started = time.perf_counter()
     trainer.train(resume_from_checkpoint=str(args.resume_from) if args.resume_from else None)
     elapsed = time.perf_counter() - started
 
     args.out.mkdir(parents=True, exist_ok=True)
     trainer.save_model(str(args.out / "final"))
-    from routechat.classifier.predict import prompt_version
-
-    # The guide version the prompts were built with; select_checkpoint copies it next to the adapter so
-    # predict.py serves the adapter with the same guide it was trained on.
-    (args.out / "prompt_version.txt").write_text(prompt_version() + "\n", encoding="utf-8")
+    # The guide the prepared records embed, in the run folder, final/ and every checkpoint (also the ones a
+    # resumed run inherited), so select_checkpoint.py evaluates and predict.py serves each adapter with that guide.
+    write_guide_markers(args.out, version)
     (args.out / "train_log.json").write_text(json.dumps(trainer.state.log_history, indent=2), encoding="utf-8")
     gpu_hours = elapsed / 3600 if torch.cuda.is_available() else 0.0
     summary.update(

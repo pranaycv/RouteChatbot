@@ -5,6 +5,8 @@ with a fake sleep and a function that raises.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from routechat import llm
@@ -88,3 +90,37 @@ def test_success_after_one_transient_error_returns_the_value():
 
     assert llm._retrying("live", sleep=lambda s: None)(flaky) == "ok"
     assert len(calls) == 2
+
+
+def test_complete_passes_caller_options_to_the_client_once(monkeypatch):
+    """main's refiner calls complete(..., options={"timeout": ..., "max_retries": ...}). The retry profile sets the
+    same two names, so each must reach ChatOpenAI exactly once, with the caller's value. A merge that drops the
+    `options` input fails here with a TypeError instead of silently in the app."""
+    import langchain_openai
+
+    seen: dict = {}
+
+    class FakeChat:
+        def __init__(self, **kwargs):
+            seen.clear()
+            seen.update(kwargs)
+
+        def invoke(self, messages):
+            return SimpleNamespace(content='{"ok": true}', usage_metadata={"input_tokens": 3, "output_tokens": 2})
+
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", FakeChat)
+    monkeypatch.setenv("FIXTURES", "live")  # live call, nothing recorded
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("ROUTECHAT_KEYS", raising=False)
+    monkeypatch.delenv("LLM_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("LLM_RETRY_PROFILE", raising=False)
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = llm.complete(messages, "gpt-4.1-mini", 0.0)
+    assert result.text == '{"ok": true}' and result.provider == "openai"
+    assert seen["model"] == "gpt-4.1-mini" and seen["api_key"] == "test-key"
+    assert seen["timeout"] == 15.0 and seen["max_retries"] == 0  # the live profile
+
+    result = llm.complete(messages, "gpt-4.1-mini", 0.0, options={"timeout": 5, "max_retries": 2})
+    assert result.text == '{"ok": true}'
+    assert seen["timeout"] == 5 and seen["max_retries"] == 2  # the caller's options win, each name passed once
