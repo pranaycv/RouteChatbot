@@ -11,6 +11,15 @@ guard:
   english_min_prob: 0.5
   other_language_min_prob: 0.9
 
+# Reads the whole conversation. gpt-6-luna with reasoning off: 208 of 216 on the test conversations, 24 Nov.
+rewriter:
+  model: gpt-6-luna
+  temperature: 0
+  max_tokens: 400
+  effort: none
+  timeout_s: 8
+  max_history_chars: 12000
+
 classifier:
   base_model: Qwen/Qwen2.5-1.5B-Instruct
   fallback_model: Qwen/Qwen2.5-0.5B-Instruct
@@ -72,6 +81,7 @@ verifier:
 
 prices:
   openai_usd_per_million_tokens:
+    gpt-6-luna: {input: 0.10, cached_input: 0.10, output: 0.50}
     gpt-4.1:
       input: 2.00
       cached_input: 0.50

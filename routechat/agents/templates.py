@@ -80,6 +80,7 @@ CLARIFY_TEMPLATES: dict[str, str] = {
 # mode_not_supported for hike, a missing mode, and an unrouted combination.
 ERROR_REASONS: tuple[str, ...] = (
     "place_not_found",
+    "place_unclear",
     "no_route",
     "transit_not_supported",
     "mode_not_supported",
@@ -118,3 +119,61 @@ def place_not_found_text(query: str) -> str:
     """Name the place that failed. An empty query does not invent one."""
     name = query.strip() or "that place"
     return f"I couldn’t find “{name}”. Could you give an address or a nearby landmark?"
+
+
+def stop_is_an_end_text(query: str, role: str) -> str:
+    """The stop is the trip's own start or end, and the map tools found no other branch on the way."""
+    end = "starts" if role == "origin" else "ends"
+    return f"“{query.strip()}” is where this trip {end}, and I couldn’t find another one on the way. Where else should I stop?"
+
+
+def place_unclear_text(query: str, options: list[str]) -> str:
+    """Ask which place is meant. One option is a doubtful match; more are places with the same name."""
+    if not options:
+        return place_not_found_text(query)
+    if len(options) == 1:
+        return (
+            f"I’m not sure I found “{query}”. Did you mean {options[0]}? "
+            "Reply yes, or give the full name with its city."
+        )
+    listed = f"{'; '.join(options[:-1])}; or {options[-1]}"
+    return f"I found more than one “{query}”: {listed}. Which one do you mean?"
+
+
+def which_trip_text(options: list[str]) -> str:
+    """Ask which trip the message is about. The options are the rewriter's, checked against the conversation."""
+    listed = [option.strip().rstrip(".") for option in options]
+    if not listed:
+        return UNPARSEABLE
+    if len(listed) == 1:
+        return f"I’m not sure which trip you mean. Is it this one: {listed[0]}?"
+    joined = f"{'; '.join(listed[:-1])}; or {listed[-1]}"
+    return f"You have talked about more than one trip: {joined}. Which one should I plan?"
+
+
+# A plain name for each sponsor category in data/sponsors.json.
+_SPONSOR_KINDS: dict[str, str] = {
+    "cafe": "a cafe",
+    "restaurant": "a restaurant",
+    "bike_shop": "a bike shop",
+    "outdoor_gear": "an outdoor gear shop",
+    "hardware_store": "a hardware store",
+    "fuel_or_charging": "a fuel or charging stop",
+    "bakery": "a bakery",
+    "ice_cream": "an ice cream shop",
+    "pet_friendly_cafe": "a pet-friendly cafe",
+    "pharmacy": "a pharmacy",
+}
+_BESIDE_ROUTE_M = 50
+
+
+def sponsor_text(name: str, category: str | None, distance_m: float | None) -> str:
+    """The sponsored place as a plain offer, always labelled (P-05). No rating and no praise."""
+    kind = _SPONSOR_KINDS.get(category or "", "a place to stop")
+    if distance_m is None:
+        where = "near the route"
+    elif distance_m < _BESIDE_ROUTE_M:
+        where = "right by the route"
+    else:
+        where = f"{int(round(distance_m))} m from the route"
+    return f"There is {kind} {where} if you need one (Sponsored: {name})."

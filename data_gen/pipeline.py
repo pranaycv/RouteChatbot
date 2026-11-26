@@ -1193,6 +1193,51 @@ def stage_split(out_dir, seed: int = 42, handwritten_csv: Optional[str] = None, 
     return rep
 
 
+# =============================================================================
+# 9b. rule-based relabel of compare_modes in train/val (the test set is never touched)
+# =============================================================================
+_MODE_RES = {"walk": r"walk(ing)?|on foot", "bike": r"bik(e|ing)|cycl(e|ing)", "car": r"driv(e|ing)|\bcar\b",
+             "run": r"\brun(ning)?\b"}
+_COMPARE_CUES = re.compile(r"\b(compare|versus|vs\.?|which|than|should i|decide|faster|quicker|better|closer|"
+                           r"under|up to|no more than|not more than|within|less than|at most|taxi|cab|metro|subway|bus)\b", re.I)
+# Comparative words (faster/quicker/better/closer) or a threshold keep compare_modes. Superlatives
+# ("fastest way", "best route") on a single mode do not: those are plan.
+
+
+def modes_named(msg: str) -> int:
+    return sum(1 for pat in _MODE_RES.values() if re.search(pat, msg, re.I))
+
+
+def compare_rule_applies(rec: dict) -> bool:
+    """compare_modes needs two or more modes named as alternatives, or a threshold/comparison cue.
+    Single-mode 'fastest/best way' messages are plan (matches how the test set was reviewed)."""
+    return (rec["labels"]["route_action"] == "compare_modes" and modes_named(rec["utterance"]) < 2
+            and not _COMPARE_CUES.search(rec["utterance"]))
+
+
+def stage_rule_relabel(out_dir, verbose: bool = True) -> dict:
+    out = Path(out_dir)
+    m = json.loads((out / "run_manifest.json").read_text())
+    log: List[dict] = []
+    for name in ("train", "val"):
+        rows = read_jsonl(out / f"{name}.jsonl")
+        for r in rows:
+            if r.get("labels_orig") is None and compare_rule_applies(r):
+                r["labels_orig"] = dict(r["labels"])
+                r["labels"] = dict(r["labels"], route_action="plan", clarify_field="none")
+                r["route_action"], r["clarify_field"] = "plan", "none"
+                r["label_source"] = "rule_compare_to_plan"
+                log.append({"id": r["id"], "split": name, "utterance": r["utterance"], "from": "compare_modes", "to": "plan"})
+        write_jsonl(out / f"{name}.jsonl", rows)
+    write_jsonl(out / "rule_relabel_log.jsonl", log)
+    summ = {"rule": "compare_modes -> plan when fewer than 2 modes are named and no comparison/threshold cue",
+            "n_changed": len(log), "by_split": dict(Counter(x["split"] for x in log))}
+    update_manifest(out, rule_relabel=summ)
+    if verbose:
+        print(summ)
+    return summ
+
+
 def stage_freeze(out_dir) -> str:
     out = Path(out_dir)
     test = read_jsonl(out / "test.jsonl")
@@ -1242,6 +1287,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     s.add_argument("--seed", type=int, default=42)
     s.add_argument("--max-flags", type=int, default=1,
                    help="train/val only use records with at most this many model-disagreement fields (-1 = no filter)")
+    rr = sub.add_parser("rule-relabel", help="compare_modes -> plan rule on train/val (test untouched)")
+    rr.add_argument("--out", default=DEFAULT_OUT)
     f = sub.add_parser("freeze", help="record sha256 of the reviewed test set")
     f.add_argument("--out", default=DEFAULT_OUT)
     v = sub.add_parser("verify")
@@ -1266,6 +1313,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         new, stats = apply_review(recs, a.csv)
         write_jsonl(Path(a.out) / a.save_as, new)
         print(stats, f"-> {a.save_as}")
+    elif a.cmd == "rule-relabel":
+        stage_rule_relabel(a.out)
     elif a.cmd == "handwriting-sheet":
         print(make_handwriting_sheet(a.path))
     elif a.cmd == "import-handwritten":

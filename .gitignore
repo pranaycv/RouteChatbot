@@ -1,4 +1,5 @@
 .env
+.streamlit/secrets.toml
 .venv/
 __pycache__/
 *.py[cod]
@@ -27,3 +28,8 @@ data/d3_pilot/
 data/d1/raw.jsonl
 data/d1/rejected.jsonl
 data/d1/jobs.jsonl
+data/d1/candidates.jsonl
+data/d1/unused.jsonl
+data/d1/review.csv
+data/d1/test_review.csv
+data_gen/review/

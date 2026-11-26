@@ -25,6 +25,7 @@ def _isolated_logs(tmp_path, monkeypatch):
 def _no_real_keys(monkeypatch):
     """Blank counts as unset. The app fills a blank CLASSIFIER_BACKEND; this restores it after the test."""
     for name in (
-        "OPENAI_API_KEY", "OPENROUTER_API_KEY", "MAPBOX_TOKEN", "GRAPHHOPPER_KEY", "CLASSIFIER_BACKEND"
+        "OPENAI_API_KEY", "OPENROUTER_API_KEY", "MAPBOX_TOKEN", "GRAPHHOPPER_KEY", "CLASSIFIER_BACKEND",
+        "ROUTECHAT_KEYS",
     ):
         monkeypatch.setenv(name, "")

@@ -36,12 +36,13 @@ def trip_success(logs: pd.DataFrame, gold: pd.DataFrame, judge: pd.DataFrame | N
     df = gold[["item_id", "expected_outcome"]].merge(logs[log_cols], on="item_id", how="left")
     df["outcome_ok"] = df["outcome"] == df["expected_outcome"]
 
-    # P-09: hiking and transit are not in the pilot. When the gold mode is one of them and the system
-    # stops with "not covered yet", that is the behaviour the policy asks for, so it counts as the
-    # right outcome. The column keeps these visible so they can be reported on their own.
+    # P-09: hiking, transit and combined modes are not in the pilot. When the gold mode is one of them
+    # and the system says it is not covered yet, that is the behaviour the policy asks for, so it counts
+    # as the right outcome. The column keeps these visible so they can be reported on their own.
     if "gold_constraints" in gold and "handoff_reason" in df:
         mode = gold.set_index("item_id")["gold_constraints"].apply(lambda c: c.get("mode") if isinstance(c, dict) else None)
-        df["not_covered_p09"] = (df["item_id"].map(mode).isin(NOT_COVERED_MODES) & (df["outcome"] == "handoff")
+        df["not_covered_p09"] = (df["item_id"].map(mode).isin(NOT_COVERED_MODES)
+                                 & df["outcome"].isin(NOT_COVERED_OUTCOMES)
                                  & df["handoff_reason"].isin(NOT_COVERED_REASONS))
     else:
         df["not_covered_p09"] = False
@@ -165,8 +166,10 @@ def cost_per_success(request_logs: pd.DataFrame, success: pd.Series) -> dict:
 
 # ---------------- LLM judge agreement (D5, 50 replies) ----------------
 JUDGE_QUESTIONS = ("all_warnings_present", "unsupported_claim", "makes_promise", "user_knows_next_step")
-NOT_COVERED_MODES = ("hike", "transit")                                   # P-09
-NOT_COVERED_REASONS = ("mode_not_supported", "transit_not_supported")     # codes the map tools put on the handoff
+NOT_COVERED_MODES = ("hike", "transit", "multimodal")                     # P-09: one mode per trip in the pilot
+NOT_COVERED_REASONS = ("mode_not_supported", "transit_not_supported")     # codes the map tools put on the route
+# Since PR #18 the verifier refuses these without a ticket; older runs show them as a handoff.
+NOT_COVERED_OUTCOMES = ("refuse", "handoff")
 
 
 def judge_agreement(judge: pd.DataFrame, human_a: pd.DataFrame, human_b: pd.DataFrame | None = None) -> pd.DataFrame:

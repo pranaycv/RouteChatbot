@@ -19,13 +19,13 @@ export FIXTURES="${FIXTURES:-record}"
 if [ "$FIXTURES" = "replay" ]; then echo "FIXTURES=replay: this replays an earlier recorded run"; fi
 
 echo "== 2. classifier (D1)"
-RUN_ID="${RUN_ID}_D1" uv run python -m eval.run_eval --classifier
+uv run python -m eval.run_eval --classifier
 
 echo "== 3. end to end with the judge (D2)"
-RUN_JUDGE=1 RUN_ID="${RUN_ID}_D2" uv run python -m eval.run_eval --e2e
+RUN_JUDGE=1 uv run python -m eval.run_eval --e2e
 
-echo "== 4. adversarial (D3), in its own log so D3 never mixes into the D2 cost"
-RUN_ID="${RUN_ID}_D3" uv run python -m eval.run_eval --adversarial
+echo "== 4. adversarial (D3); its log is logs/<run_id>_D3.jsonl, so D3 never mixes into the D2 cost"
+uv run python -m eval.run_eval --adversarial
 
 echo "== 5. cost model, on the D2 log only"
 if [ -f "logs/${RUN_ID}_D2.jsonl" ]; then

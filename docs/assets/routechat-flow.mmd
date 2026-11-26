@@ -1,0 +1,44 @@
+flowchart TD
+    U(["💬 <b>Your message</b>"])
+
+    subgraph S1 ["<b>1 · Understand</b>"]
+        direction LR
+        G1["🛡️ <b>Input guard</b><br/>block attacks,<br/>mask personal data"]
+        R["✏️ <b>Query refiner</b><br/>one clear request<br/>from the whole chat"]
+        C["🏷️ <b>Classifier</b><br/>choose what<br/>to do"]
+        E["📋 <b>Extractor</b><br/>places, stops,<br/>mode, preferences"]
+        G1 --> R --> C --> E
+    end
+
+    subgraph S2 ["<b>2 · Plan and check</b>"]
+        direction LR
+        M["🗺️ <b>Map tools</b><br/>Mapbox places,<br/>GraphHopper route"]
+        V["✅ <b>Verifier</b><br/>met, unmet or<br/>unverifiable"]
+        M --> V
+        V -.->|revise once| M
+    end
+
+    subgraph S3 ["<b>3 · Reply</b>"]
+        direction LR
+        W["💡 <b>Writer</b><br/>template or one<br/>model call"]
+        G2["🔎 <b>Output guard</b><br/>check the reply<br/>against the facts"]
+        W --> G2
+    end
+
+    U --> S1
+    S1 -->|complete trip| S2
+    S1 -.->|blocked, unclear,<br/>refused or incomplete| S3
+    S2 -->|accept, ask,<br/>refuse or hand off| S3
+    S3 --> A(["📍 <b>Route on the map</b>"])
+    S3 --> Q(["❓ <b>A short question</b>"])
+    S3 --> H(["🧑 <b>Refusal or handoff</b>"])
+
+    classDef llm fill:#dbeafe,stroke:#2f78c4,stroke-width:2px,color:#12263a
+    classDef code fill:#ffffff,stroke:#64748b,stroke-width:1.5px,color:#12263a
+    classDef io fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#12263a
+    classDef phase fill:transparent,stroke:#94a3b8,stroke-width:1.5px
+    class R,C,E,W llm
+    class G1,M,V,G2 code
+    class U,A,Q,H io
+    class S1,S2,S3 phase
+    linkStyle default stroke:#7c8b9c,stroke-width:2px

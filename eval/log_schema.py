@@ -94,6 +94,10 @@ def outcome_from_state(state: dict) -> str:
     rep = state.get("report") or {}
     if rep.get("decision") == "handoff" or state.get("handoff"):
         return "handoff"
+    # P-09 (PR #18): the verifier answers a mode the pilot does not plan without a ticket.
+    # A missing mode becomes clarify; hike and combined modes become refuse.
+    if rep.get("decision") in ("clarify", "refuse"):
+        return rep["decision"]
     return "accept"
 
 

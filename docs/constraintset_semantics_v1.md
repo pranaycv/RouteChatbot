@@ -1,7 +1,7 @@
 # ConstraintSet field meanings, v1
 
 Owner: WP3 (constraint extractor). Agreed with WP4 map tools and WP5 verifier (Preeti) on 18 Nov 2026. Status: v1 frozen.
-Source: schemas v1 in `routechat/schemas.py`, the handbook's WP3 extraction rules, and the README's "Decisions other packages depend on".
+Source: schemas v1 in `routechat/schemas.py`, the handbook's WP3 extraction rules, and "Decisions other packages depend on" in `docs/architecture.md`.
 
 The ConstraintSet is the form the extractor fills in from the user's message. Map tools and the verifier read it. This page states what every field means so the three packages never disagree. The types below are the frozen schema's.
 
@@ -60,5 +60,5 @@ The ConstraintSet is the form the extractor fills in from the user's message. Ma
 1. **Times.** Clock times with today assumed, Toronto local time throughout. An `arrive_by` earlier than `depart_at` becomes an ambiguity ("do you mean tomorrow?"). Future-day planning would need a date and is out of the pilot.
 2. **Stop order.** 1-based. Map tools preserve the user's order when given, else choose the shortest. A required stop is a hard check in the verifier.
 3. **Empty lists.** An empty `avoid` or `prefer` adds no rules from that list. Explicit fields still apply on their own: `minimize_elevation = true` adds a slope preference even when both lists are empty. The verifier checks a preference only when it was requested.
-4. **Loops.** A loop with no destination starts and finishes at the resolved origin. A valid origin and a `target_distance_km` are both needed. (Passing device coordinates for a "my location" origin into the map stage is an open point for WP0 and WP7, not a ConstraintSet field.)
+4. **Loops.** A loop with no destination starts and finishes at the resolved origin. A valid origin and a `target_distance_km` are both needed. (Device coordinates for a "my location" origin are not a ConstraintSet field. The graph writes "current location" and passes the point to the map stage as `device`; see README, "A missing start is the device location".)
 5. **EV.** `category = ev_charging_station` on a stop is enough for the pilot. Range and connector checks would need extra user inputs and provider data, so they stay out unless the team explicitly includes them. No `ev_range_km`, `charger_type` or `fuel_or_charging`; adding any of them would be a schema-change pull request with WP0.

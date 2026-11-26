@@ -42,6 +42,7 @@ from routechat.agents.templates import (
     UNSAFE_OR_ILLEGAL,
 )
 from routechat.agents.maps_node import maps_node
+from routechat.agents.templates import sponsor_text
 from routechat.agents.writer import build_facts, template_message, write_node, write_reply
 from routechat.config import get_settings
 from routechat.graph import SYSTEM_ERROR_TEXT as GRAPH_SYSTEM_ERROR_TEXT
@@ -53,15 +54,17 @@ from routechat.schemas import (
     GuardResult,
     RefusalReason,
     ReplyDraft,
+    ResolvedPlace,
     RouteClassification,
     SponsoredSuggestion,
+    Stop,
 )
 from routechat.stubs import running_candidate, running_constraints, running_places, running_report
 from routechat.verify.decide import verify_node
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLIES = ROOT / "tests" / "fixtures" / "writer_replies.json"
-PROMPT = ROOT / "prompts" / "writer_v2.md"
+PROMPT = ROOT / "prompts" / "writer_v3.md"
 SECRET = "SECRET-RAW-UTTERANCE"
 
 # WP7 banned phrases, plus the writer rule against "safe" and "guaranteed".
@@ -254,6 +257,8 @@ def test_t_6_01_error_codes_have_templates(reason: str):
     assert message
     if reason == "place_not_found":
         assert "King Station, Toronto" in message
+    elif reason == "place_unclear":
+        assert "couldn’t find" in message
     elif reason == "no_route":
         assert message == NO_ROUTE
     elif reason == "transit_not_supported":
@@ -442,7 +447,8 @@ def test_t_6_04_recorded_replies_pass_output_guard_rules():
     assert [item["name"] for item in replies] == ["accept", "accept_two_warnings", "handoff"]
     for reply in replies:
         assert _guard_problems(reply) == [], reply["name"]
-        assert reply["message"] in prompt
+        # Code adds the sponsored place after the model's own sentences.
+        assert reply["message"].split(" There is a cafe")[0] in prompt
     invented = dict(replies[0])
     invented["message"] = invented["message"].replace("4.2 km", "9 km")
     assert _guard_problems(invented)
@@ -493,3 +499,68 @@ def test_facts_round_the_evidence_and_carry_the_compared_route():
     assert facts["checks"][0]["evidence"] == "4.22 km; allowed range 4.5 to 5.5 km."
     assert facts["other_route"] == {"mode": "walk", "distance_km": 3.1, "duration_min": 37}
     assert build_facts(_planned())["other_route"] is None
+
+
+# --- The sponsored place: one plain sentence, written by code ---
+
+
+def test_the_sponsor_is_added_by_code_and_never_shown_to_the_model():
+    sponsored = SponsoredSuggestion(
+        name="Dark Horse Espresso", category="cafe", lon=-79.39, lat=43.66, rating=4.6, distance_m=180.4
+    )
+    state = _planned(report=running_report().model_copy(update={"sponsored": sponsored}))
+    model = _FakeModel(ReplyDraft(message="Here's a 4.2 km bike route.", mentioned_ids=[], kind="llm"))
+    draft = write_reply(state, model)
+    assert draft.message == (
+        "Here's a 4.2 km bike route. "
+        "There is a cafe 180 m from the route if you need one (Sponsored: Dark Horse Espresso)."
+    )
+    assert "Dark Horse" not in str(model.messages) and "sponsored" not in str(model.messages[1])
+
+
+def test_the_sponsor_sentence_is_plain_for_every_catalog_category():
+    catalog = json.loads((ROOT / "data" / "sponsors.json").read_text(encoding="utf-8"))
+    for record in catalog:
+        text = sponsor_text(record["name"], record["category"], 8.0)
+        assert f"(Sponsored: {record['name']})" in text
+        assert "right by the route" in text and "a place to stop" not in text
+        assert "_" not in text and "rated" not in text
+    assert "near the route" in sponsor_text("X", None, None)
+
+
+def _stop_not_found(query: str, *, origin: tuple[str, str], destination: tuple[str, str], times: int = 1):
+    """A trip whose required stop the map tools did not resolve. An end is its query and its name."""
+    stop = Stop(query=query, category=None, required=True, order=None)
+    constraints = running_constraints().model_copy(
+        update={"origin": origin[0], "destination": destination[0], "stops": [stop] * times}
+    )
+    places = [
+        ResolvedPlace(role=role, query=end[0], name=end[1], lon=0, lat=0, source="searchbox")
+        for role, end in (("origin", origin), ("destination", destination))
+    ]
+    report = running_report().model_copy(
+        update={"decision": "clarify", "handoff_reason": "place_not_found", "chosen_route": None, "must_mention": []}
+    )
+    state = _planned(constraints=constraints, report=report, candidates=[], places=places)
+    return write_reply(state, llm=_Boom()).message
+
+
+BARRIE = ("Barrie", "Barrie")
+
+
+@pytest.mark.parametrize("origin", [("Yorkdale Mall", "Yorkdale Place"), ("the mall", "Yorkdale Mall")])
+def test_a_stop_that_is_the_start_is_named_as_the_start(origin):
+    message = _stop_not_found("Yorkdale Mall", origin=origin, destination=BARRIE)
+    assert "“Yorkdale Mall” is where this trip starts" in message
+    assert message.endswith("Where else should I stop?")
+
+
+def test_a_stop_that_is_the_end_is_named_as_the_end():
+    message = _stop_not_found("Barrie", origin=("Yorkdale Mall", "Yorkdale Place"), destination=BARRIE)
+    assert "“Barrie” is where this trip ends" in message
+
+
+@pytest.mark.parametrize(("query", "times"), [("Nowhere Cafe", 1), ("Nowhere Cafe", 2)])
+def test_a_stop_that_is_neither_end_is_still_not_found(query, times):
+    message = _stop_not_found(query, origin=("Yorkdale Mall", "Yorkdale Place"), destination=BARRIE, times=times)
+    assert message.startswith("I couldn’t find “Nowhere Cafe”")

@@ -5,15 +5,21 @@
 """WP7 Streamlit app. Conversation on the left, the trip on the right.
 
 The visual language follows EyesRhythm: a light paper background, Inter-like
-type, soft white cards, and one blue. The map is a street basemap with the
-route line and the place pins drawn on top. Places and checks sit under the
+type, soft white cards, and one blue. The map is a light, street, dark, or
+satellite basemap with the route line and the place pins drawn on top. Places and checks sit under the
 map. Keys come from .env. With no model key, and no recorded replies to
 replay, the screen shows the saved sample trip.
 """
 
 from __future__ import annotations
 
+import base64
+import logging
+import math
 import os
+import re
+import time
+from contextlib import nullcontext
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -24,12 +30,16 @@ import pydeck as pdk
 import streamlit as st
 from dotenv import load_dotenv
 
+from routechat.agents.rewriter import clean_message
 from routechat.classifier.predict import adapter_dir
 from routechat.config import get_settings
 from routechat.evidence import tidy_evidence
-from routechat.graph import invoke
+from routechat.device import device_place
+from routechat.graph import invoke, is_new_trip, question_key, resume, wants_device
 from routechat.logging import append_handoff, mask_for_log, read_handoffs
+from routechat.progress import board_html, doing, done, summary_html
 from routechat.stubs import RUNNING_UTTERANCE
+from routechat import keys, locate
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,10 +55,22 @@ def _configure() -> None:
     if not os.environ.get("STUBS"):
         has_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
         replay = os.environ.get("FIXTURES", "").strip().lower() == "replay"
-        os.environ["STUBS"] = "0" if has_key or replay else "1"
+        os.environ["STUBS"] = "0" if has_key or replay or keys.from_visitors() else "1"
+    # At INFO, httpx logs whole addresses, and a map address holds the key.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     # The fine-tuned classifier is the default backend. Until its adapter is on disk, prompt instead.
     if not os.environ.get("CLASSIFIER_BACKEND") and not adapter_dir().exists():
         os.environ["CLASSIFIER_BACKEND"] = "prompted_small"
+
+
+def _own_keys() -> bool:
+    """True when this server asks each visitor for their keys."""
+    return keys.from_visitors() and os.environ.get("STUBS") != "1"
+
+
+def _sample() -> bool:
+    """True when this visitor gets the saved sample trip instead of the real stages."""
+    return os.environ.get("STUBS") == "1" or (_own_keys() and not st.session_state.get("own_keys"))
 
 
 _ROUTE = [47, 120, 196]
@@ -59,6 +81,42 @@ _END = [224, 122, 114, 230]
 _SPONSOR = [91, 159, 224, 220]
 _SPONSOR_INK = [31, 94, 158, 255]
 SPONSOR_LABEL = "Sponsored"
+TEAM = "Team Rosedale : MMAI 2027"
+TEAM_NAMES = ("Tara Cotter", "Preeti Shehrawat", "Rishi Sharma", "Ran Liu", "Pranay Soni")
+
+_ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services"
+_ESRI_CREDIT = "Imagery: Esri, Vantor, Earthstar Geographics, and the GIS User Community"
+_SATELLITE = {
+    "version": 8,
+    "sources": {
+        # Past zoom 18 Esri has no photo of many places outside the city, so the map stretches this one.
+        "imagery": {
+            "type": "raster",
+            "tiles": [f"{_ESRI}/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}"],
+            "tileSize": 256,
+            "maxzoom": 18,
+            "attribution": _ESRI_CREDIT,
+        },
+        "names": {
+            "type": "raster",
+            "tiles": [f"{_ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{{z}}/{{y}}/{{x}}"],
+            "tileSize": 256,
+            "maxzoom": 18,
+        },
+    },
+    "layers": [
+        {"id": "imagery", "type": "raster", "source": "imagery"},
+        {"id": "names", "type": "raster", "source": "names"},
+    ],
+}
+_DEFAULT_VIEW = "Street"
+# pydeck takes a style object only for Mapbox, so the satellite style travels as a data URL.
+_MAP_VIEWS = {
+    "Light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+    "Street": "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
+    "Dark": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+    "Satellite": "data:application/json;base64," + base64.b64encode(orjson.dumps(_SATELLITE)).decode(),
+}
 
 _CSS = """
 <style>
@@ -94,13 +152,19 @@ html, body, [data-testid="stAppViewContainer"], .stApp {
   color: var(--text);
   font-family: var(--font);
 }
-[data-testid="stHeader"] { background: transparent; height: 0; }
+/* On Streamlit Cloud this bar fills with links and lies over the top bar, so a tap must pass through it. */
+[data-testid="stHeader"] { background: transparent; height: 0; pointer-events: none; }
+[data-testid="stHeader"] * { pointer-events: none; }
+[data-testid="stStatusWidget"], [data-testid="stStatusWidget"] * { pointer-events: auto; }
+[data-testid="stToolbarActions"] { display: none !important; }
 #MainMenu, footer, [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stMain"], [data-testid="stAppViewContainer"] { overflow: hidden; }
 .block-container {
-  padding: 14px 16px 12px !important;
+  padding: 16px !important;
   max-width: 100% !important;
 }
+/* The block that carries this style sheet is empty, but Streamlit still puts a gap after it. */
+[data-testid="stElementContainer"]:has(style) { display: none !important; }
 button, input, textarea, [data-testid="stMarkdown"], [data-testid="stMarkdownContainer"] p {
   font-family: var(--font);
 }
@@ -111,7 +175,6 @@ button, input, textarea, [data-testid="stMarkdown"], [data-testid="stMarkdownCon
   border-radius: 16px;
   box-shadow: var(--shadow-soft);
   padding: 12px 16px !important;
-  margin-bottom: 12px;
   justify-content: center !important;
 }
 .st-key-topbar [data-testid="stHorizontalBlock"] { align-items: center !important; width: 100%; }
@@ -137,6 +200,27 @@ button, input, textarea, [data-testid="stMarkdown"], [data-testid="stMarkdownCon
 }
 
 .rc-brand { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.rc-team {
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  padding-left: 18px; border-left: 1px solid var(--stroke);
+}
+.rc-team b {
+  color: var(--blue-ink); font-size: 11px; font-weight: 700; letter-spacing: 0.03em; line-height: 1.25;
+}
+.rc-team div { display: flex; flex-wrap: wrap; gap: 6px; }
+.rc-team span {
+  display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+  color: var(--text); font-size: 12px; font-weight: 550; line-height: 1.2;
+  background: linear-gradient(180deg, #ffffff 0%, #eef5fc 100%); border: 1px solid rgba(47, 120, 196, 0.18);
+}
+/* The name takes its own width, the team sits next to it, and the button stays on the right. */
+.st-key-topbar [data-testid="stColumn"]:has(.rc-brand) {
+  flex: 0 0 auto !important; width: auto !important; min-width: 0 !important;
+}
+.st-key-topbar [data-testid="stColumn"]:has(.rc-team) {
+  flex: 1 1 0 !important; width: auto !important; min-width: 0 !important;
+}
+.st-key-topbar [data-testid="stColumn"]:has(.st-key-new_chat) { margin-left: auto !important; }
 .rc-mark {
   width: 36px; height: 36px; border-radius: 11px; flex: none;
   display: grid; place-items: center;
@@ -198,7 +282,7 @@ button, input, textarea, [data-testid="stMarkdown"], [data-testid="stMarkdownCon
   font-weight: 600;
 }
 
-@media (min-width: 1100px) {
+@media (min-width: 901px) {
   [data-testid="stColumn"]:has(.st-key-rail) {
     flex: 0 0 var(--rail) !important;
     width: var(--rail) !important;
@@ -206,7 +290,8 @@ button, input, textarea, [data-testid="stMarkdown"], [data-testid="stMarkdownCon
     max-width: var(--rail) !important;
   }
   [data-testid="stColumn"]:has(.st-key-stage) {
-    flex: 1 1 auto !important;
+    /* A basis of 0, so a wide row under the map never pushes the stage below the rail. */
+    flex: 1 1 0 !important;
     width: auto !important;
     min-width: 0 !important;
   }
@@ -217,18 +302,20 @@ button, input, textarea, [data-testid="stMarkdown"], [data-testid="stMarkdownCon
   border: 1px solid var(--stroke);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  /* Streamlit's column flex-basis ignores a plain height, so pin all three. */
+  /* Streamlit's column flex-basis ignores a plain height, so pin all three.
+     118px is the 70px top bar and the 16px gaps above it, below it, and under the panels. */
   flex: 0 0 auto !important;
-  height: calc(100vh - 132px) !important;
-  min-height: calc(100vh - 132px) !important;
-  max-height: calc(100vh - 132px) !important;
+  height: calc(100dvh - 118px) !important;
+  min-height: calc(100dvh - 118px) !important;
+  max-height: calc(100dvh - 118px) !important;
   overflow: hidden !important;
   display: flex !important;
   flex-direction: column !important;
   gap: 8px !important;
 }
 .st-key-rail { padding: 16px !important; }
-.st-key-stage { padding: 16px !important; }
+/* The stage scrolls when a short screen cannot hold the map and the checks. */
+.st-key-stage { padding: 16px !important; overflow: hidden auto !important; }
 .st-key-rail [data-testid="stElementContainer"],
 .st-key-stage [data-testid="stElementContainer"],
 .st-key-rail [data-testid="stMarkdown"],
@@ -245,6 +332,10 @@ button, input, textarea, [data-testid="stMarkdown"], [data-testid="stMarkdownCon
   display: flex !important;
   flex-direction: column !important;
 }
+/* Reversed, so the area rests at its end: the newest message and step are in view without scrolling. */
+.st-key-thread { flex-direction: column-reverse !important; justify-content: flex-start !important; }
+.st-key-thread > * { flex: 0 0 auto !important; margin-bottom: auto !important; }
+.st-key-messages { gap: 4px !important; }
 .st-key-thread {
   flex: 1 1 auto !important;
   min-height: 0 !important;
@@ -281,6 +372,26 @@ button, input, textarea, [data-testid="stMarkdown"], [data-testid="stMarkdownCon
   padding: 0 !important;
 }
 .rc-field-label { margin: 10px 2px 8px !important; }
+.rc-input {
+  margin: 8px 0 0 !important; padding: 8px 0 0 !important; border-top: 1px solid rgba(47, 120, 196, 0.16);
+  color: var(--soft); font-size: 12.5px !important; line-height: 1.4 !important;
+}
+.rc-input b { display: block; color: var(--blue-ink); font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase; }
+.rc-steps { list-style: none; margin: 0 !important; padding: 0 !important; }
+.rc-steps li {
+  position: relative; margin: 0 !important; padding: 3px 0 3px 22px !important;
+  color: var(--soft); font-size: 13px !important; line-height: 1.4 !important;
+}
+.rc-steps li.done::before { content: "✓"; position: absolute; left: 2px; color: var(--blue-deep); font-weight: 700; }
+.rc-steps li.now { color: var(--text); font-weight: 600; }
+.rc-steps li.now::before {
+  content: ""; position: absolute; left: 1px; top: 7px; width: 10px; height: 10px; border-radius: 99px;
+  border: 2px solid rgba(47, 120, 196, 0.25); border-top-color: var(--blue-deep); animation: rc-spin 0.8s linear infinite;
+}
+@keyframes rc-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .rc-steps li.now::before { animation: none; } }
+.rc-done { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(30, 48, 72, 0.07); }
+.rc-done summary { color: var(--faint); font-size: 12px; cursor: pointer; }
 .rc-hint { color: var(--faint); font-size: 12.5px; margin: 8px 0 0; line-height: 1.4; }
 
 .st-key-rail [data-testid="stBaseButton-primary"] {
@@ -447,7 +558,7 @@ button:focus-visible {
 .st-key-stage:not(:has(.st-key-facts)) [data-testid="stPydeckChart"],
 .st-key-stage:not(:has(.st-key-facts)) [data-testid="stDeckGlJsonChart"] iframe,
 .st-key-stage:not(:has(.st-key-facts)) [data-testid="stPydeckChart"] iframe {
-  height: calc(100vh - 248px) !important;
+  height: calc(100dvh - 234px) !important;
   min-height: 320px !important;
 }
 .rc-legend {
@@ -502,6 +613,113 @@ button:focus-visible {
 .rc-badge.met { color: var(--blue-ink); background: #e7f1fb; border-color: rgba(47, 120, 196, 0.16); }
 .rc-badge.unmet { color: #9c403c; background: #fdeceb; border-color: rgba(224, 122, 114, 0.3); }
 .rc-badge.unverifiable { color: #8a5a1e; background: #fbf3e7; border-color: rgba(224, 161, 90, 0.35); }
+
+/* Tablets on their side: a narrower rail, and a map that keeps a useful height. */
+@media (min-width: 901px) and (max-width: 1099px) {
+  :root { --rail: 310px; }
+  .rc-brand-copy p { display: none; }
+  .rc-team { padding-left: 12px; }
+  .rc-team div { gap: 4px; }
+  .rc-team span { padding: 3px 7px; font-size: 11px; }
+  .st-key-topbar [data-testid="stHorizontalBlock"] { gap: 12px !important; }
+  .st-key-topbar [data-testid="stColumn"]:has(.st-key-new_chat) { flex: 0 0 128px !important; width: 128px !important; min-width: 128px !important; }
+  .st-key-stage > div:has([data-testid="stDeckGlJsonChart"]) { min-height: 260px !important; }
+}
+
+/* Phones, upright tablets, and phones on their side: one column that scrolls as a page. */
+@media (max-width: 900px), (max-height: 560px) {
+  [data-testid="stMain"] { overflow: hidden auto !important; }
+  /* The space below the last card is for the badge Streamlit Cloud puts in the corner. */
+  .block-container { padding: 12px 12px 64px !important; }
+  .block-container > [data-testid="stVerticalBlock"] { gap: 12px !important; }
+
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .st-key-rail) {
+    flex-direction: column !important;
+    gap: 12px !important;
+  }
+  [data-testid="stColumn"]:has(.st-key-rail),
+  [data-testid="stColumn"]:has(.st-key-stage) {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+  .st-key-rail, .st-key-stage {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 12px !important;
+  }
+  .st-key-rail > div:has(.st-key-thread), .st-key-thread {
+    flex: 0 0 auto !important;
+    overflow: visible !important;
+  }
+  /* The box to type in comes straight after the reply. Support follows it. */
+  .st-key-rail > div:has([data-testid="stChatInput"]) { order: 1; }
+  .st-key-rail > div:has(.rc-support) { order: 2; margin-top: 4px !important; }
+
+  /* Short enough that a thumb can still scroll the page beside the map. */
+  .st-key-stage > div:has([data-testid="stDeckGlJsonChart"]) {
+    flex: 0 0 auto !important;
+    height: clamp(220px, 48svh, 460px) !important;
+  }
+  .st-key-stage [data-testid="stDeckGlJsonChart"],
+  .st-key-stage:not(:has(.st-key-facts)) [data-testid="stDeckGlJsonChart"] {
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+
+  .st-key-topbar { padding: 10px 12px !important; }
+  .st-key-topbar [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 10px 8px !important; }
+  .st-key-topbar [data-testid="stColumn"]:has(.rc-brand) { flex: 1 1 0 !important; }
+  /* The team gets a row of its own under the name and the button. */
+  .st-key-topbar [data-testid="stColumn"]:has(.rc-team) { order: 3; flex: 1 0 100% !important; }
+  .rc-team { padding: 9px 0 0; border-left: none; border-top: 1px solid var(--stroke); width: 100%; }
+  .st-key-topbar [data-testid="stColumn"]:last-child {
+    flex: 0 0 128px !important;
+    width: 128px !important;
+    min-width: 128px !important;
+  }
+  .st-key-topbar [data-testid="stBaseButton-secondary"] {
+    min-height: 44px !important;
+    height: 44px !important;
+  }
+  /* Under 16px, an iPhone zooms the page in when the box is tapped. */
+  [data-testid="stChatInputTextArea"] { font-size: 16px !important; }
+  [data-testid="stChatInputSubmitButton"] { min-width: 40px !important; min-height: 40px !important; }
+  .st-key-map_view button { min-height: 44px !important; }
+  .st-key-show_sponsors label { min-height: 44px; align-items: center; }
+}
+
+@media (max-width: 600px) {
+  .rc-brand { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 2px 10px; align-content: center; }
+  .rc-mark { grid-row: span 2; align-self: center; }
+  .rc-brand-copy { align-self: center; }
+  .rc-brand:not(:has(.rc-pill)) .rc-brand-copy { grid-row: span 2; }
+  .rc-brand-copy h1 { white-space: nowrap; }
+  .rc-brand-copy p { display: none; }
+  .rc-pill { justify-self: start; }
+
+  /* Four numbers as two by two, five as three and two. The lines are the gaps. */
+  .rc-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 1px;
+    background: #e6ebf1;
+  }
+  .rc-metrics:has(.rc-metric:nth-child(5)) { grid-template-columns: repeat(6, minmax(0, 1fr)) !important; }
+  .rc-metrics:has(.rc-metric:nth-child(5)) .rc-metric { grid-column: span 2; }
+  .rc-metrics:has(.rc-metric:nth-child(5)) .rc-metric:nth-child(n + 4) { grid-column: span 3; }
+  .rc-metric { border-right: none; background: var(--inset); padding: 10px 12px; min-height: 56px; }
+
+  .st-key-mapfoot { gap: 6px !important; }
+  .st-key-map_view { flex: 1 0 100% !important; }
+  .st-key-map_view, .st-key-map_view [data-testid="stButtonGroup"],
+  .st-key-map_view [role="radiogroup"] { width: 100% !important; }
+  .st-key-map_view button { flex: 1 1 0 !important; min-width: 0 !important; padding: 4px 6px !important; }
+  .rc-legend { gap: 12px; flex-wrap: wrap; }
+  .rc-panel { padding: 12px; }
+}
 </style>
 """
 
@@ -516,20 +734,43 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
 
 def _init() -> None:
     st.session_state.setdefault("history", [])
+    st.session_state.setdefault("turns", [])
     st.session_state.setdefault("known", None)
     st.session_state.setdefault("clarify_count", 0)
     st.session_state.setdefault("pending", None)
+    st.session_state.setdefault("asked", [])
+    st.session_state.setdefault("options", [])
+    st.session_state.setdefault("trips", [])
+    st.session_state.setdefault("full", None)
+    st.session_state.setdefault("picked", [])
     st.session_state.setdefault("last", None)
+    st.session_state.setdefault("waiting", None)
+    st.session_state.setdefault("queue", [])
+    st.session_state.setdefault("seen", [])
+    st.session_state.setdefault("no_location", False)
     st.session_state.setdefault("composer_epoch", 0)
+    st.session_state.setdefault("tickets", [])
+    st.session_state.setdefault("own_keys", {})
+    st.session_state.setdefault("keys_open", False)
 
 
 def _new_chat() -> None:
     """Drop this thread. The next message starts from a blank map."""
     st.session_state.history = []
+    st.session_state.turns = []
     st.session_state.known = None
     st.session_state.clarify_count = 0
     st.session_state.pending = None
+    st.session_state.asked = []
+    st.session_state.options = []
+    st.session_state.trips = []
+    st.session_state.full = None
+    st.session_state.picked = []
     st.session_state.last = None
+    st.session_state.waiting = None
+    st.session_state.queue = []
+    st.session_state.seen = []
+    st.session_state.no_location = False
     st.session_state.composer_epoch = int(st.session_state.get("composer_epoch", 0)) + 1
 
 
@@ -566,39 +807,260 @@ def _with_pending(utterance: str) -> str:
     return joined if len(joined) <= get_settings().guard.max_chars else utterance
 
 
+_FILLER = frozenset("a an and at by de du go i in is it la le me of on one or please that the this to".split())
+_SEEN = 20  # places of earlier trips that a follow-up may mean
+_PICK_WORDS = 8  # a longer message says more than which place, so the rewriter reads it
+
+
+def _ordinal(words: set[str], count: int) -> int | None:
+    """Which of count offers a short answer points at, by its number, or by yes when there is one."""
+    if len(words) > 4:
+        return None
+    if count == 1 and words & {"yes", "yeah", "yep", "ok", "okay", "sure", "correct", "right", "1"}:
+        return 0
+    numbers = ({"1", "first"}, {"2", "second"}, {"3", "third"})[:count] if count > 1 else ()
+    named = [index for index, names in enumerate(numbers) if words & names]
+    return named[0] if len(named) == 1 else None
+
+
+def _pick_trip(utterance: str) -> str | None:
+    """The trip this answer chooses when the app asked which one, as a full request."""
+    trips, st.session_state.trips = st.session_state.trips, []
+    words = set(re.findall(r"\w+", utterance.casefold())) - _FILLER
+    # Only a bare choice. "the first one but by bike" is for the rewriter.
+    if not words or words - {"first", "second", "third", "1", "2", "3", "trip", "yes", "yeah", "yep", "ok", "okay", "sure"}:
+        return None
+    number = _ordinal(words, len(trips))
+    return None if number is None else trips[number]
+
+
+def _pick(utterance: str) -> Any:
+    """The offered place this answer names, or None."""
+    options = st.session_state.options
+    said = re.findall(r"\w+", utterance.casefold())
+    words = set(said) - _FILLER
+    if not options or not words or len(said) > _PICK_WORDS:
+        return None
+    number = _ordinal(words, len(options))
+    if number is not None:
+        return options[number]
+    if len(options) == 1:
+        return None
+    # Words every option shares, such as the place's own name, do not tell them apart.
+    labels = [set(re.findall(r"\w+", str(_field(option, "name")).casefold())) for option in options]
+    shared = set.intersection(*labels)
+    # Every word must be about a place on offer: "bike to Alberta instead" is a new request.
+    if not words <= set.union(*labels):
+        return None
+    named = [option for option, label in zip(options, labels) if words & (label - shared)]
+    return named[0] if len(named) == 1 else None
+
+
+def _whole_request(place: Any) -> str | None:
+    """The last complete request with the chosen place written in, or None when it cannot be done safely."""
+    asked = str(_field(place, "query") or "")
+    if not st.session_state.full or not asked:
+        return None
+    found = re.findall(rf"(?<!\w){re.escape(asked)}(?!\w)", st.session_state.full, re.IGNORECASE)
+    # The name of both ends, or a name reworded since, does not say which words to replace.
+    if len(found) != 1:
+        return None
+    return st.session_state.full.replace(found[0], str(_field(place, "name")))
+
+
+def _answer(utterance: str) -> tuple[str, bool]:
+    """Turn a choice between offered places into a request. True when it is a complete one.
+
+    A complete request needs nothing from before. Otherwise it is a change, and the
+    extractor adds it to the trip already known.
+    """
+    place = _pick(utterance)
+    st.session_state.options = []
+    if place is None:
+        return utterance, False
+    st.session_state.picked = [*st.session_state.picked, place]
+    whole = _whole_request(place)
+    if whole:
+        return whole, True
+    end = "start" if _field(place, "role") == "origin" else "destination"
+    return f"Change the {end} to {_field(place, 'name')}", False
+
+
+def _planner_input(state: dict[str, Any], utterance: str) -> tuple[str, str] | None:
+    """What the classifier read for this turn, as a label and a text. None when the guard stopped it."""
+    guard = state.get("guard")
+    if _field(guard, "decision") != "allow" or _sample():
+        return None
+    rewritten = state.get("rewrite")
+    status = _field(rewritten, "status")
+    if status == "ready":
+        return "Refined query", _field(rewritten, "query")
+    if status == "unclear":
+        return "Refined query", "None yet. It is not clear which trip this is."
+    text = _field(guard, "clean_text")
+    return "Sent as it is" if text == clean_message(utterance) else "Refined query", text
+
+
 def _ask(utterance: str) -> None:
-    """Run one turn and remember the reply, the constraints, and the map state."""
-    request_id = f"r_{uuid4().hex[:8]}"
-    request = _with_pending(utterance)
-    state = invoke(
-        {
-            "request_id": request_id,
-            "utterance": request,
-            # 1 is a follow-up on a known trip, as in the label guide and D1. Never 2.
-            "turn_index": 0 if st.session_state.known is None else 1,
-            "known": st.session_state.known,
-            "clarify_count": st.session_state.clarify_count,
-            "revision_count": 0,
-        }
-    )
+    """Put one message in the queue. The page shows it at once and _work runs it."""
+    st.session_state.queue = [*st.session_state.queue, {"utterance": utterance}]
+
+
+def _located(fix: dict[str, Any] | None) -> None:
+    """Queue the rest of the turn that waited, with the browser's reply, or without one when the user moved on."""
+    waiting, st.session_state.waiting = st.session_state.waiting, None
+    device = device_place(fix)
+    job = {
+        "utterance": waiting["turn"]["utterance"],
+        "turn": waiting["turn"],
+        "waited": waiting["state"],
+        "device": device,
+        "no_location": fix is not None and device is None,
+        "steps": waiting.get("steps", []),
+        "seconds": waiting.get("seconds", 0.0),
+    }
+    st.session_state.queue = [job, *st.session_state.queue]
+
+
+def _prepare(job: dict[str, Any]) -> None:
+    """Work out what the graph gets, once. A job that is interrupted by a click runs again from here."""
+    if "turn" in job:
+        return
+    utterance = job["utterance"]
+    trip = _pick_trip(utterance)
+    message, whole = (trip, True) if trip else _answer(utterance)
+    request = message if whole else _with_pending(message)
+    known = None if whole else st.session_state.known
+    if trip:
+        # The trip is settled, so what was asked before it was chosen does not count.
+        st.session_state.clarify_count = 0
+        st.session_state.asked = []
+    job["turn"] = {"utterance": utterance, "message": message, "request": request, "known": known}
+    job["payload"] = {
+        "request_id": f"r_{uuid4().hex[:8]}",
+        "utterance": request,
+        "latest": message,
+        # A place or a trip picked from a list is already clear, so it needs no reading of the conversation.
+        "history": list(st.session_state.turns) if message == utterance else None,
+        # 1 is a follow-up on a known trip, as in the label guide and D1. Never 2.
+        "turn_index": 0 if known is None else 1,
+        "known": known,
+        "clarify_count": st.session_state.clarify_count,
+        "asked": list(st.session_state.asked),
+        "picked": list(st.session_state.picked),
+        "seen": list(st.session_state.seen),
+        "revision_count": 0,
+        "locatable": not _sample(),
+    }
+
+
+def _input_html(shown: tuple[str, str]) -> str:
+    label, text = shown
+    return f"<p class='rc-input'><b>{escape(label)}</b>{escape(text)}</p>"
+
+
+def _open_turn(job: dict[str, Any]) -> tuple[Any, Any]:
+    """Show the message and the first step at once. Returns the places the live parts are drawn in."""
+    with st.chat_message("user"):
+        st.markdown(job["utterance"])
+        refined = st.empty()
+    with st.chat_message("assistant"):
+        board = st.empty()
+    first = doing("guard_in") if "waited" not in job else doing("maps")
+    board.markdown(board_html(job.get("steps", []), first), unsafe_allow_html=True)
+    return refined, board
+
+
+def _work(job: dict[str, Any], refined: Any, board: Any) -> None:
+    """Run the first job in the queue and draw each step as it starts and as it finishes."""
+    _prepare(job)
+    steps: list[str] = list(job.get("steps", []))
+    seen: dict[str, Any] = dict(job.get("waited") or {})
+    started = time.perf_counter()
+
+    def on_step(stage: str, update: dict[str, Any] | None) -> None:
+        if update is None:
+            board.markdown(board_html(steps, doing(stage)), unsafe_allow_html=True)
+            return
+        seen.update(update)
+        line = done(stage, update)
+        if line:
+            steps.append(line)
+        board.markdown(board_html(steps, None), unsafe_allow_html=True)
+        if stage == "rewrite":
+            shown = _planner_input(seen, job["utterance"])
+            if shown:
+                refined.markdown(_input_html(shown), unsafe_allow_html=True)
+
+    nodes: dict[str, Any] = {}
+    if _own_keys() and _sample():
+        from routechat.stubs import stub_nodes
+
+        nodes = {"nodes": stub_nodes()}
+    with keys.visitor_keys(st.session_state.get("own_keys") or {}) if _own_keys() else nullcontext():
+        if "waited" in job:
+            state = resume(job["waited"], job["device"], **nodes, on_step=on_step)
+        else:
+            state = invoke(job["payload"], **nodes, on_step=on_step)
+    seconds = job.get("seconds", 0.0) + time.perf_counter() - started
+    # Nothing below draws, so a click cannot stop it halfway.
+    st.session_state.queue = st.session_state.queue[1:]
+    st.session_state.no_location = job.get("no_location", False)
+    if "waited" not in job and wants_device(state):
+        st.session_state.waiting = {"state": state, "turn": job["turn"], "steps": steps, "seconds": seconds}
+        return
+    _remember(state, **job["turn"])
+    st.session_state.history[-1]["steps"] = (steps, seconds)
+
+
+def _remember(state: dict[str, Any], *, utterance: str, message: str, request: str, known: Any) -> None:
+    """Keep the reply, the constraints, and the map state of a finished turn."""
+    request_id = state.get("request_id")
     final = state.get("final")
     answer = _field(final, "text", "I couldn't finish that trip. Please try again in a minute.")
-    st.session_state.history.append({"role": "user", "content": utterance})
+    st.session_state.history.append({"role": "user", "content": utterance, "input": _planner_input(state, utterance)})
     st.session_state.history.append({"role": "assistant", "content": answer})
+    rewritten = state.get("rewrite")
+    status = _field(rewritten, "status")
+    if status == "ready":
+        request = _field(rewritten, "query")
+    if is_new_trip(state):
+        # Questions asked about another trip do not count against this one.
+        st.session_state.clarify_count = 0
+        st.session_state.asked = []
+        st.session_state.picked = []
+    # A message the guard stopped never reaches the rewriter, now or later.
+    if _field(state.get("guard"), "decision") == "allow":
+        st.session_state.turns = [
+            *st.session_state.turns,
+            {"user": clean_message(message), "query": clean_message(request), "assistant": answer},
+        ]
+        st.session_state.full = clean_message(request) if status == "ready" or known is None else None
     constraints = state.get("constraints")
     action = _field(state.get("classification"), "route_action")
+    if action is None and status == "unclear":
+        action = "clarify"
+        st.session_state.trips = list(_field(rewritten, "options"))
+    report = state.get("report")
+    escalated = action == "escalate"
     # A clarify may carry a half-read trip. The pending message is what the answer is joined to.
+    # A trip passed to a person is finished here, so the next message starts a new one.
     if constraints is not None and action != "clarify":
-        st.session_state.known = constraints
+        st.session_state.known = None if escalated else constraints
     asked_before = st.session_state.clarify_count > 0
     if action == "clarify":
         st.session_state.clarify_count += 1
         st.session_state.pending = request
     elif action is not None:
-        st.session_state.clarify_count = 0
+        # The verifier asks about a trip that is already known, so its answer is a follow-up on that trip.
+        asks = not escalated and _field(report, "decision") == "clarify"
+        st.session_state.clarify_count = st.session_state.clarify_count + 1 if asks else 0
         st.session_state.pending = None
-    report = state.get("report")
-    escalated = action == "escalate"
+    key = question_key(state)
+    counted = st.session_state.clarify_count > 0 and key is not None and not escalated
+    st.session_state.asked = [*st.session_state.asked, key] if counted else []
+    if counted and _field(report, "handoff_reason") == "place_unclear":
+        st.session_state.options = list(state.get("places") or [])
     if escalated or _field(report, "decision") == "handoff" or state.get("handoff") is not None:
         reason = "still_unclear" if asked_before else "needs_a_person"
         ticket = state.get("handoff") or {
@@ -609,8 +1071,20 @@ def _ask(utterance: str) -> None:
         if hasattr(ticket, "model_dump"):
             ticket = ticket.model_dump()
         append_handoff(ticket)
+        st.session_state.tickets = [*st.session_state.tickets, ticket.get("request_id")]
+    if _field(report, "decision") == "accept":
+        ends = [
+            place for place in state.get("places") or []
+            if _field(place, "role") != "stop" and _field(place, "source") != "device"
+        ]
+        st.session_state.seen = [*ends, *st.session_state.seen][:_SEEN]
     # graph.invoke already wrote this request's line; the app adds no second copy.
     st.session_state.last = state
+
+
+def _on_phone() -> bool:
+    """True when the browser says it is a phone. The server cannot see the width of the screen."""
+    return "Mobi" in str(st.context.headers.get("User-Agent") or "")
 
 
 def _view(coords: list[list[float]]) -> pdk.ViewState:
@@ -619,9 +1093,19 @@ def _view(coords: list[list[float]]) -> pdk.ViewState:
     span = max(max(lons) - min(lons), max(lats) - min(lats), 0.01)
     # One step wider than a square map, so both pins stay inside the short stage.
     zoom = 12 if span < 0.03 else 11 if span < 0.08 else 10
+    longitude, latitude = sum(lons) / len(lons), sum(lats) / len(lats)
+    # A long trip: centre on the box around it and zoom out until a 400 by 180 px stage holds it.
+    # The map on a phone is narrower than that.
+    room = 240 if _on_phone() else 400
+    wide = max(max(lons) - min(lons), 0.01)
+    tall = max((max(lats) - min(lats)) / math.cos(math.radians(latitude)), 0.01)
+    fit = math.log2(360 / 512 * min(room / wide, 180 / tall))
+    if fit < zoom and span >= 0.2:
+        zoom = max(fit, 2)
+        longitude, latitude = (max(lons) + min(lons)) / 2, (max(lats) + min(lats)) / 2
     return pdk.ViewState(
-        longitude=sum(lons) / len(lons),
-        latitude=sum(lats) / len(lats),
+        longitude=longitude,
+        latitude=latitude,
         zoom=zoom,
         pitch=0,
         bearing=0,
@@ -726,6 +1210,23 @@ def _catalog_layers(sponsors: list[dict[str, Any]]) -> list[pdk.Layer]:
     ]
 
 
+def _map_view() -> str:
+    """The chosen basemap. The switcher sits under the map, so the choice is read from the session."""
+    view = st.session_state.get("map_view")
+    return view if view in _MAP_VIEWS else _DEFAULT_VIEW
+
+
+def _view_switcher() -> None:
+    st.segmented_control(
+        "Map view",
+        list(_MAP_VIEWS),
+        default=_DEFAULT_VIEW,
+        required=True,
+        key="map_view",
+        label_visibility="collapsed",
+    )
+
+
 def _sponsor_toggle() -> bool:
     available = bool(load_sponsors())
     shown = st.toggle(
@@ -760,8 +1261,7 @@ def _map(state: dict[str, Any]) -> None:
     for place in places:
         role = _field(place, "role")
         color = {"origin": _START, "stop": _STOP, "destination": _END}.get(role, _START)
-        hours = _field(place, "opening_hours")
-        hours_line = hours if hours else "Hours not confirmed"
+        hours_line = _hours_line(place)
         points.append(
             {
                 "coordinates": [_field(place, "lon"), _field(place, "lat")],
@@ -829,7 +1329,7 @@ def _map(state: dict[str, Any]) -> None:
         layers=layers,
         initial_view_state=_view(focus),
         map_provider="carto",
-        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+        map_style=_MAP_VIEWS[_map_view()],
         tooltip={"text": "{tip}"},
     )
     st.pydeck_chart(deck, height=640)
@@ -847,12 +1347,14 @@ def _shown_catalog(sponsored: Any = None) -> list[dict[str, Any]]:
 
 
 def _map_footer(has_sponsor: bool) -> None:
-    with st.container(key="mapfoot"):
-        legend, toggle = st.columns([1, 0.5], vertical_alignment="center", gap=12)
-        with legend:
-            st.markdown(_legend_html(has_sponsor), unsafe_allow_html=True)
-        with toggle:
-            _sponsor_toggle()
+    # A row that wraps, so the switcher is never cut off on a narrow screen.
+    row = st.container(
+        key="mapfoot", horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"
+    )
+    with row:
+        st.markdown(_legend_html(has_sponsor), unsafe_allow_html=True, width="content")
+        _view_switcher()
+        _sponsor_toggle()
 
 
 def _metrics(state: dict[str, Any]) -> None:
@@ -886,16 +1388,22 @@ def _metrics(state: dict[str, Any]) -> None:
     )
 
 
+def _hours_line(place: Any) -> str:
+    """Opening hours, when they are known. Where the user is has none."""
+    if _field(place, "source") == "device":
+        return "From your device"
+    return str(_field(place, "opening_hours") or "Hours not confirmed")
+
+
 def _places(state: dict[str, Any]) -> None:
     places = list(state.get("places") or [])
     if not places:
         return
     rows = []
     for place in places:
-        hours = _field(place, "opening_hours")
-        hours_line = hours if hours else "Hours not confirmed"
+        hours_line = _hours_line(place)
         detour = _field(place, "detour_km")
-        extra = f" · detour {detour} km" if detour is not None else ""
+        extra = f" · detour {detour:.1f} km" if detour is not None and detour >= 0.05 else ""
         role = str(_field(place, "role", "") or "place")
         rows.append(
             "<div class='rc-row'>"
@@ -960,8 +1468,16 @@ def _checks(state: dict[str, Any]) -> None:
     )
 
 
-def _support() -> None:
+def _tickets() -> list[dict[str, Any]]:
+    """The support queue. On a server shared by visitors, only the tickets of this visit."""
     tickets = read_handoffs()
+    if not keys.from_visitors():
+        return tickets
+    return [ticket for ticket in tickets if ticket.get("request_id") in st.session_state.tickets]
+
+
+def _support() -> None:
+    tickets = _tickets()
     if not tickets:
         st.markdown(
             "<section class='rc-support'><div class='rc-section'>Support</div>"
@@ -995,7 +1511,7 @@ def _base_map() -> None:
         layers=_catalog_layers(catalog),
         initial_view_state=pdk.ViewState(latitude=43.6532, longitude=-79.3832, zoom=12, pitch=0),
         map_provider="carto",
-        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+        map_style=_MAP_VIEWS[_map_view()],
         tooltip={"text": "{tip}"},
     )
     st.pydeck_chart(deck, height=720)
@@ -1038,7 +1554,7 @@ def _stage(state: dict[str, Any] | None) -> None:
 def _topbar(sample: bool) -> None:
     pill = "<span class='rc-pill'>Sample trip</span>" if sample else ""
     with st.container(key="topbar"):
-        title, action = st.columns([1, 0.18], vertical_alignment="center", gap=12)
+        title, team, action = st.columns([0.3, 0.6, 0.18], vertical_alignment="center", gap=18)
         with title:
             st.markdown(
                 "<div class='rc-brand'>"
@@ -1053,17 +1569,96 @@ def _topbar(sample: bool) -> None:
                 f"{pill}</div>",
                 unsafe_allow_html=True,
             )
+        with team:
+            names = "".join(f"<span>{escape(name)}</span>" for name in TEAM_NAMES)
+            st.markdown(f"<div class='rc-team'><b>{escape(TEAM)}</b><div>{names}</div></div>", unsafe_allow_html=True)
         with action:
             if st.button("New chat", icon=":material/maps_ugc:", key="new_chat", width="stretch"):
                 _new_chat()
                 st.rerun()
 
 
-def _conversation(sample: bool) -> str | None:
+def _location() -> None:
+    """Ask the browser where the user is while a trip waits for it, and say so when there was no answer."""
+    waiting = st.session_state.waiting
+    if waiting is None:
+        if st.session_state.no_location:
+            st.caption("I couldn't get your location. Allow it in the browser, or type a start.")
+        return
+    with st.chat_message("user"):
+        st.markdown(waiting["turn"]["utterance"])
+    with st.chat_message("assistant"):
+        st.markdown(
+            board_html(waiting.get("steps", []), "Finding your location. Your browser may ask you to allow it"),
+            unsafe_allow_html=True,
+        )
+    fix = locate.browser_fix(waiting["state"]["request_id"])
+    if fix is not None:
+        _located(fix)
+        st.rerun()
+
+
+def _close_keys() -> None:
+    st.session_state.keys_open = False
+
+
+@st.dialog("Your keys", on_dismiss=_close_keys)
+def _keys_dialog() -> None:
+    """Take this visitor's keys, check them with each provider, and keep them for this visit."""
+    st.markdown(
+        "RouteChat uses your own accounts, so your usage is charged to you. Your keys stay in this server's "
+        "memory for this visit. They are not saved or logged, and other visitors cannot see them. "
+        "Refreshing the page clears them."
+    )
+    st.markdown(
+        "Get a key from [OpenRouter](https://openrouter.ai/settings/keys) or "
+        "[OpenAI](https://platform.openai.com/api-keys), "
+        "[Mapbox](https://console.mapbox.com/account/access-tokens/) and "
+        "[GraphHopper](https://graphhopper.com/dashboard/). Set a spending limit on the model key."
+    )
+    with st.form("keys_form", border=False):
+        model = st.text_input("OpenRouter or OpenAI key", type="password", autocomplete="off")
+        mapbox = st.text_input("Mapbox token", type="password", autocomplete="off")
+        graphhopper = st.text_input("GraphHopper key", type="password", autocomplete="off")
+        sent = st.form_submit_button("Check and use", type="primary", width="stretch")
+    if sent:
+        model, mapbox, graphhopper = model.strip(), mapbox.strip(), graphhopper.strip()
+        if not (model and mapbox and graphhopper):
+            st.error("All three keys are needed.")
+        else:
+            given = {keys.model_key_name(model): model, "MAPBOX_TOKEN": mapbox, "GRAPHHOPPER_KEY": graphhopper}
+            with st.spinner("Checking your keys"):
+                found = keys.problems(given)
+            if found:
+                st.error("\n\n".join(found))
+            else:
+                _use_keys(given)
+                st.rerun()
+    if st.session_state.own_keys and st.button("Remove my keys", key="remove_keys", width="stretch"):
+        _use_keys({})
+        st.rerun()
+
+
+def _use_keys(given: dict[str, str]) -> None:
+    """Change this visit's keys. The thread starts again, so a sample trip never mixes with a real one."""
+    _new_chat()
+    _close_keys()
+    st.session_state.own_keys = given
+
+
+def _conversation(sample: bool) -> tuple[str | None, Any]:
+    """The chat. Returns the new message, if any, and where the running turn is drawn."""
+    live = None
     with st.container(key="rail"):
         st.markdown("<div class='rc-panel-title'>Conversation</div>", unsafe_allow_html=True)
-        with st.container(key="thread"):
-            if not st.session_state.history:
+        if _own_keys():
+            label = "Your keys" if st.session_state.get("own_keys") else "Add your keys"
+            if st.button(label, icon=":material/key:", key="open_keys", width="stretch"):
+                st.session_state.keys_open = True
+        # One block inside the scroll area: the area shows its end, so a new step is always in view.
+        with st.container(key="thread"), st.container(key="messages"):
+            queue = st.session_state.queue
+            if not st.session_state.history and st.session_state.waiting is None and not queue:
                 hint = (
                     "<p class='rc-hint'>Sample mode answers with the saved King Station ride.</p>"
                     if sample
@@ -1088,12 +1683,23 @@ def _conversation(sample: bool) -> str | None:
                 for message in st.session_state.history:
                     with st.chat_message(message["role"]):
                         st.markdown(message["content"])
+                        if message.get("input"):
+                            st.markdown(_input_html(message["input"]), unsafe_allow_html=True)
+                        if message.get("steps"):
+                            st.markdown(summary_html(*message["steps"]), unsafe_allow_html=True)
+            _location()
+            if queue:
+                live = _open_turn(queue[0])
         _support()
         st.markdown("<div class='rc-field-label'>Trip request</div>", unsafe_allow_html=True)
-        return st.chat_input(
-            "Where are you heading?",
+        # Without keys every request would get the sample ride, so only its button is on.
+        locked = _own_keys() and sample
+        prompt = st.chat_input(
+            "Add your keys to plan a trip" if locked else "Where are you heading?",
+            disabled=locked,
             key=f"composer-{st.session_state.composer_epoch}",
         )
+    return prompt, live
 
 
 def main() -> None:
@@ -1101,17 +1707,25 @@ def main() -> None:
     st.set_page_config(page_title="RouteChat", page_icon="🗺️", layout="wide")
     st.markdown(_CSS, unsafe_allow_html=True)
     _init()
-    sample = os.environ.get("STUBS") == "1"
+    sample = _sample()
     _topbar(sample)
     rail, stage = st.columns([0.28, 0.72], gap=16, vertical_alignment="top")
-    prompt = None
     with rail:
-        prompt = _conversation(sample)
+        prompt, live = _conversation(sample)
+    if st.session_state.keys_open:
+        _keys_dialog()
     if prompt:
+        if st.session_state.waiting is not None:
+            # The user wrote instead of allowing it, so that turn ends with its question.
+            _located(None)
         _ask(prompt)
         st.rerun()
     with stage:
         _stage(st.session_state.last)
+    if live is not None:
+        # Last, so the message and the map are on screen while the steps run.
+        _work(st.session_state.queue[0], *live)
+        st.rerun()
 
 
 if __name__ == "__main__":

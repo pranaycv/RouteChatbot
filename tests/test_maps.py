@@ -8,6 +8,7 @@ import pytest
 from routechat.agents import maps_node as maps
 from routechat.maps.client import MapClient, MapError
 from routechat.maps.graphhopper import build_request, candidate_from_path
+from routechat.schemas import ResolvedPlace, Stop
 from routechat.stubs import running_classification, running_constraints
 
 POINTS = [[-79.4, 43.65], [-79.39, 43.65], [-79.38, 43.65]]
@@ -180,3 +181,307 @@ def test_graphhopper_free_plan_rejection_is_distinct_from_no_route(monkeypatch):
         with pytest.raises(MapError, match="^flexible_mode_unavailable$"):
             client.request("graphhopper", "POST", "https://example.test", {})
         assert client.calls["graphhopper"] == 1
+
+
+class _Places:
+    """Answers each query with fixed features."""
+
+    def __init__(self, answers):
+        self.answers = answers
+
+    def request(self, _api, _method, _url, params, _body=None):
+        return {"features": self.answers.get(params.get("q"), [])}
+
+
+def _trip(origin, destination):
+    return running_constraints().model_copy(update={"origin": origin, "destination": destination, "stops": []})
+
+
+def test_a_destination_may_be_any_distance_away():
+    client = _Places({
+        "CN Tower": [_feature("CN Tower", [-79.387, 43.642])],
+        "Blue Mountain": [_feature("Blue Mountain", [-80.316, 44.501], "The Blue Mountains")],
+    })
+    assert [place.name for place in maps._resolve(client, _trip("CN Tower", "Blue Mountain"))] == [
+        "CN Tower", "Blue Mountain",
+    ]
+
+
+def test_a_far_trip_with_two_places_of_that_name_is_asked_about():
+    edmonton = _feature("Canada Place", [-113.49, 53.54], "Edmonton")
+    vancouver = _feature("Canada Place", [-123.11, 49.29], "Vancouver")
+    client = _Places({
+        "Canada Place": [edmonton, vancouver],
+        "Stanley Park": [_feature("Stanley Park", [-123.14, 49.30], "Vancouver")],
+    })
+    trip = _trip("Canada Place", "Stanley Park")
+    with pytest.raises(MapError, match="^place_unclear$") as asked:
+        maps._resolve(client, trip)
+    options = asked.value.places
+    assert [place.name for place in options] == ["Canada Place, Edmonton", "Canada Place, Vancouver"]
+    # The place the user picks is used as it is, so the question is not asked again.
+    chosen = maps._resolve(client, _trip("Canada Place, Vancouver", "Stanley Park"), [options[1]])
+    assert (chosen[0].lon, chosen[0].lat) == (-123.11, 49.29)
+
+
+def test_a_name_that_does_not_fit_is_asked_about():
+    client = _Places({
+        "CN Tower": [_feature("CN Tower", [-79.387, 43.642])],
+        "Zzyx Hall": [_feature("Hallam Street", [-79.43, 43.67])],
+    })
+    with pytest.raises(MapError, match="^place_unclear$") as asked:
+        maps._resolve(client, _trip("CN Tower", "Zzyx Hall"))
+    assert asked.value.places[0].name == "Hallam Street, Toronto"
+
+
+def test_an_unknown_destination_keeps_the_origin_that_was_found():
+    client = _Places({"CN Tower": [_feature("CN Tower", [-79.387, 43.642])]})
+    with pytest.raises(MapError, match="^place_not_found$") as missing:
+        maps._resolve(client, _trip("CN Tower", "Nowhere"))
+    assert [place.role for place in missing.value.places] == ["origin"]
+
+
+@pytest.mark.parametrize(("query", "name", "fits"), [
+    ("the ROM", "Royal Ontario Museum", True),
+    ("University of Toronto", "U of T", True),
+    ("Scoatiabank Arena", "Scotiabank Arena", True),
+    ("Hamilton City Hall", "Old City Hall", False),
+    ("younge - eglinton crossing", "Crossing-Labrecque", False),
+])
+def test_name_fit(query, name, fits):
+    assert (maps._score(query, name, []) >= maps._NAME_MATCH) is fits
+
+
+
+def test_a_transit_stop_is_found_by_its_station_name():
+    """Mapbox names the Toronto subway stop "King". A "King Station" elsewhere must not win over it."""
+    subway = _feature("King", [-79.378, 43.649])
+    subway["properties"]["poi_category_ids"] = ["railway_station", "transportation"]
+    other = _feature("King Station", [-79.550, 43.924], "King")
+    other["properties"]["poi_category_ids"] = ["railway_station", "transportation"]
+    client = _Places({
+        "King Station": [subway, other],
+        "University of Toronto": [_feature("University of Toronto", [-79.395, 43.661])],
+    })
+    origin = maps._resolve(client, _trip("King Station", "University of Toronto"))[0]
+    assert (origin.lon, origin.lat) == (-79.378, 43.649)
+
+
+def test_the_kind_of_place_counts_as_part_of_its_name():
+    mall = _feature("Yorkdale Place", [-79.45, 43.725], "North York")
+    mall["properties"]["poi_category_ids"] = ["shopping", "shopping_mall"]
+    client = _Places({"Yorkdale Mall": [mall], "Casa Loma": [_feature("Casa Loma", [-79.409, 43.678])]})
+    assert maps._resolve(client, _trip("Yorkdale Mall", "Casa Loma"))[0].name == "Yorkdale Place"
+
+
+class _Branches(_Places):
+    """Tim Hortons every tenth of a degree, and no route, so the straight line is the way."""
+
+    def request(self, api, method, url, params, body=None):
+        if api == "graphhopper":
+            raise MapError("no_route")
+        if params.get("q") == "Tim Hortons":
+            lon, lat = (float(value) for value in params["proximity"].split(","))
+            near = sorted((round(-79 - step / 10, 1) for step in range(1, 10)), key=lambda value: abs(value - lon))
+            return {"features": [_feature("Tim Hortons", [value, 43.7], f"Town {value}") for value in near[:5]]}
+        return super().request(api, method, url, params, body)
+
+
+def _two_stops(count=2):
+    stop = Stop(query="Tim Hortons", category=None, required=True, order=None)
+    return _trip("CN Tower", "Barrie Hall").model_copy(update={"stops": [stop] * count})
+
+
+def test_a_stop_wanted_twice_is_two_places_spread_along_the_way():
+    client = _Branches({
+        "CN Tower": [_feature("CN Tower", [-79.0, 43.7])],
+        "Barrie Hall": [_feature("Barrie Hall", [-80.0, 43.7], "Barrie")],
+    })
+    places = maps._resolve(client, _two_stops())
+    assert [place.role for place in places] == ["origin", "stop", "stop", "destination"]
+    assert [place.lon for place in places[1:3]] == [-79.3, -79.7]
+    # Each branch is named with its town, so the two can be told apart.
+    assert [place.name for place in places[1:3]] == ["Tim Hortons, Town -79.3", "Tim Hortons, Town -79.7"]
+
+
+def test_too_few_branches_is_place_not_found():
+    client = _Places({
+        "CN Tower": [_feature("CN Tower", [-79.0, 43.7])],
+        "Barrie Hall": [_feature("Barrie Hall", [-80.0, 43.7], "Barrie")],
+        "Tim Hortons": [_feature("Tim Hortons", [-79.3, 43.7])],
+    })
+    with pytest.raises(MapError, match="^place_not_found$"):
+        maps._resolve(client, _two_stops())
+
+
+def _place(name, point, role="origin", query=None):
+    return ResolvedPlace(role=role, query=query or name, name=name, lon=point[0], lat=point[1], source="searchbox")
+
+
+def test_the_way_back_uses_the_places_of_the_trip_out():
+    seen = [_place("Casa Loma", [-79.41, 43.68]), _place("High Park", [-79.46, 43.65], "destination")]
+    client = _Places({"High Park": [_feature("High Park", [-82.36, 42.98], "Sarnia")]})
+    back = maps._resolve(client, _trip("High Park", "Casa Loma"), seen=seen)
+    assert [(place.role, place.lon) for place in back] == [("origin", -79.46), ("destination", -79.41)]
+
+
+def test_a_known_place_is_used_with_one_found_near_it():
+    seen = [_place("High Park", [-79.46, 43.65], "destination")]
+    client = _Places({
+        "High Park": [_feature("High Park", [-82.36, 42.98], "Sarnia")],
+        "CN Tower": [_feature("CN Tower", [-79.387, 43.642])],
+    })
+    assert maps._resolve(client, _trip("High Park", "CN Tower"), seen=seen)[0].lon == -79.46
+    assert maps._resolve(client, _trip("CN Tower", "High Park"), seen=seen)[-1].lon == -79.46
+
+
+def test_a_known_place_does_not_pull_a_trip_from_another_city():
+    seen = [_place("Union Station", [-79.38, 43.645])]
+    client = _Places({
+        "Union Station": [_feature("Union Station", [-97.134, 49.889], "Winnipeg")],
+        "The Forks": [_feature("The Forks", [-97.131, 49.887], "Winnipeg")],
+    })
+    assert maps._resolve(client, _trip("Union Station", "The Forks"), seen=seen)[0].lon == -97.134
+
+
+LISTING = "2 Bedrooms Available to Make Your Stay a Pleasant. Close To Tim Hortons, etc."
+ENDS = {"CN Tower": [_feature("CN Tower", POINTS[0])], "Barrie Hall": [_feature("Barrie Hall", POINTS[2])]}
+
+
+def _one_stop(query, origin="CN Tower", destination="Barrie Hall"):
+    stop = Stop(query=query, category=None, required=True, order=None)
+    return _trip(origin, destination).model_copy(update={"stops": [stop]})
+
+
+def _stop(found, trip):
+    return next(place for place in maps._resolve(_Places({**ENDS, **found}), trip) if place.role == "stop")
+
+
+def test_a_stop_is_the_place_itself_and_not_a_listing_that_mentions_it():
+    found = {"Tim Hortons": [_feature(LISTING, POINTS[1]), _feature("Tim Hortons", [-79.39, 43.651])]}
+    assert _stop(found, _one_stop("Tim Hortons")).name == "Tim Hortons"
+
+
+def test_a_stop_wanted_twice_skips_a_listing_that_mentions_it():
+    found = {"Tim Hortons": [
+        _feature(LISTING, [-79.3933, 43.65]),
+        _feature("Tim Hortons", [-79.394, 43.651]),
+        _feature("Tim Hortons", [-79.386, 43.651]),
+    ]}
+    places = maps._resolve(_Places({**ENDS, **found}), _two_stops())
+    assert [place.name for place in places if place.role == "stop"] == ["Tim Hortons, Toronto"] * 2
+
+
+def test_a_crossing_is_not_swapped_for_a_nearer_one():
+    found = {"Markham Rd at Finch Ave East": [
+        _feature("Kennedy Rd at Finch Ave East", POINTS[1]),
+        _feature("Finch Ave East at Markham Rd", [-79.39, 43.651]),
+    ]}
+    assert _stop(found, _one_stop("Markham Rd at Finch Ave East")).name == "Finch Ave East at Markham Rd"
+
+
+def test_a_longer_name_that_starts_with_the_words_is_kept():
+    found = {"Ripleys": [
+        _feature("Cosy condo in the heart of downtown close to Ripleys", POINTS[1]),
+        _feature("Ripleys Aquarium of Canada and gift shop", [-79.39, 43.651]),
+    ]}
+    assert _stop(found, _one_stop("Ripleys")).name.startswith("Ripleys Aquarium")
+
+
+def test_a_short_form_still_finds_its_place():
+    found = {"ROM": [_feature("Druxys ROM Cafe", POINTS[1]), _feature("Royal Ontario Museum", [-79.39, 43.651])]}
+    assert _stop(found, _one_stop("ROM")).name == "Royal Ontario Museum"
+
+
+@pytest.mark.parametrize("end", ["origin", "destination"])
+def test_a_stop_is_another_branch_and_not_the_start_or_the_end(end):
+    here, other = POINTS[0] if end == "origin" else POINTS[2], [-79.39, 43.652]
+    found = {"Tim Hortons": [_feature("Tim Hortons", here), _feature("Tim Hortons", other)]}
+    place = _stop(found, _one_stop("Tim Hortons", **{end: "Tim Hortons"}))
+    assert [place.lon, place.lat] == other
+
+
+def test_a_stop_at_the_start_with_no_other_branch_is_asked_about():
+    """A shop inside the mall is not a second mall, so nothing takes its place."""
+    found = {"Yorkdale Mall": [
+        _feature("Yorkdale Mall", POINTS[0]),
+        _feature("Trade Secrets | Yorkdale Mall", POINTS[0]),
+    ]}
+    with pytest.raises(MapError, match="^place_not_found$"):
+        _stop(found, _one_stop("Yorkdale Mall", origin="Yorkdale Mall"))
+
+
+def test_a_stop_wanted_twice_is_not_the_start():
+    found = {"Tim Hortons": [
+        _feature("Tim Hortons", POINTS[0]),
+        _feature("Tim Hortons", [-79.392, 43.652]),
+        _feature("Tim Hortons", [-79.384, 43.652]),
+    ]}
+    trip = _two_stops().model_copy(update={"origin": "Tim Hortons"})
+    stops = [place.lon for place in maps._resolve(_Places({**ENDS, **found}), trip) if place.role == "stop"]
+    assert sorted(stops) == [-79.392, -79.384]
+
+
+def test_a_type_of_place_at_the_start_is_still_allowed():
+    """Coffee inside the station the trip starts from is a fair stop: it is not the station."""
+    trip = _trip("CN Tower", "Barrie Hall").model_copy(
+        update={"stops": [Stop(query="coffee", category="coffee", required=True, order=None)]}
+    )
+    assert _stop({None: [_feature("Union Coffee", POINTS[0])]}, trip).name == "Union Coffee"
+
+
+class _Categories(_Places):
+    """Answers a category search by its slug, which is the last part of the address, and any other by its words."""
+
+    def __init__(self, categories, answers):
+        super().__init__({**ENDS, **answers})
+        self.categories, self.asked = categories, []
+
+    def request(self, api, method, url, params, body=None):
+        if "/category/" in url:
+            self.asked.append(url.rsplit("/", 1)[1])
+            return {"features": self.categories.get(self.asked[-1], [])}
+        return super().request(api, method, url, params, body)
+
+
+def _kind_of_stop(word, categories, answers=None, times=1):
+    stop = Stop(query=word, category=word, required=True, order=None)
+    client = _Categories(categories, answers or {})
+    trip = _trip("CN Tower", "Barrie Hall").model_copy(update={"stops": [stop] * times})
+    places = [place for place in maps._resolve(client, trip) if place.role == "stop"]
+    return places, client.asked
+
+
+@pytest.mark.parametrize(
+    ("word", "slug"),
+    [
+        ("lunch", "restaurant"), ("Dinner", "restaurant"), ("breakfast", "breakfast_restaurant"),
+        ("ev_charging_station", "charging_station"), ("EV charger", "charging_station"),
+        ("gas", "gas_station"), ("groceries", "grocery"), ("lookout", "viewpoint"),
+        ("coffee", "coffee"), ("ice cream", "ice_cream"), ("pharmacy", "pharmacy"),
+    ],
+)
+def test_a_kind_of_stop_is_searched_by_mapboxs_word_for_it(word, slug):
+    places, asked = _kind_of_stop(word, {slug: [_feature("The place", POINTS[1])]})
+    assert asked == [slug]
+    # The stop keeps the user's word, which is how the verifier and the reply know it.
+    assert [(place.name, place.query) for place in places] == [("The place", word)]
+
+
+def test_a_kind_mapbox_does_not_list_is_searched_by_name():
+    places, _ = _kind_of_stop("washroom", {}, {"public toilet": [
+        _feature("Finest Cleaners", POINTS[1]), _feature("Public Toilet", [-79.39, 43.651]),
+    ]})
+    assert [(place.name, place.query) for place in places] == [("Public Toilet", "washroom")]
+
+
+def test_a_kind_found_by_no_name_is_asked_about():
+    with pytest.raises(MapError, match="^place_not_found$"):
+        _kind_of_stop("zorbing", {}, {"zorbing": [_feature("Finest Cleaners", POINTS[1])]})
+
+
+def test_a_kind_wanted_twice_is_searched_by_mapboxs_word_too():
+    found = [_feature("One", [-79.394, 43.651]), _feature("Two", [-79.386, 43.651])]
+    places, asked = _kind_of_stop("lunch", {"restaurant": found}, times=2)
+    assert sorted(place.name for place in places) == ["One, Toronto", "Two, Toronto"]
+    assert set(asked) == {"restaurant"}

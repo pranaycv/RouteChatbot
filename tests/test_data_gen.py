@@ -418,3 +418,114 @@ def test_T_8_35_review_label_typos_are_forgiven():
     lab = P.clean_corrected({"route_action": "compare", "clarify_field": "origin", "needs_live_data": "tru",
                              "primary_mode": "bike", "refusal_reason": "none"})
     assert lab["route_action"] == "compare_modes" and lab["clarify_field"] == "none" and lab["needs_live_data"] is True
+
+
+def test_T_8_36_compare_rule():
+    from data_gen import pipeline as P
+    def rec(u): return {"utterance": u, "labels": {"route_action": "compare_modes"}}
+    assert P.compare_rule_applies(rec("whats the fastest way to Rogers Centre?"))
+    assert P.compare_rule_applies(rec("best route to drive to Reid Lodge at 4 PM"))
+    assert not P.compare_rule_applies(rec("is it better to drive during rush hour?"))
+    assert not P.compare_rule_applies(rec("is it faster to drive or walk to Casa Loma?"))
+    assert not P.compare_rule_applies(rec("compare bike routes to the market"))
+    assert not P.compare_rule_applies(rec("walk if under 25 minutes otherwise take the bus"))
+
+
+def test_t_8_37_apply_d3_review(tmp_path):
+    """keep/fix/reject by id; fix keeps turn count; reject goes to d3_rejected; rerun is idempotent."""
+    import csv, json, shutil
+    from data_gen import datasets as D
+    shutil.copy(Path(D.DATASETS_DIR) / "d3_adversarial.jsonl", tmp_path / "d3_adversarial.jsonl")
+    recs = D.read_jsonl(str(tmp_path / "d3_adversarial.jsonl"))
+    with open(tmp_path / "r.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "family", "tactic", "turns", "decision", "edited_turns", "reviewer", "notes"])
+        for i, r in enumerate(recs):
+            dec = "reject" if i == 0 else "fix" if i == 1 else "keep"
+            w.writerow([r["id"], "", "", "", dec, " ||| ".join(t + " X" for t in r["turns"]) if i == 1 else "", "", ""])
+    out = D.apply_d3_review(str(tmp_path / "r.csv"), str(tmp_path))
+    assert out["rejected"] == [recs[0]["id"]] and out["fixed"] == [recs[1]["id"]] and out["kept"] == len(recs) - 1
+    again = D.apply_d3_review(str(tmp_path / "r.csv"), str(tmp_path))
+    assert again["kept"] == out["kept"]
+    fixed = [r for r in D.read_jsonl(str(tmp_path / "d3_adversarial.jsonl")) if r["id"] == recs[1]["id"]][0]
+    assert fixed["turns"][-1].endswith(" X") and fixed["utterance"] == fixed["turns"][-1]
+
+
+def test_t_8_38_d2_coords_and_cp1252_import(tmp_path):
+    """Verified coordinates are applied by (id, role); blank rows stay unverified; cp1252 sheets import."""
+    import csv, shutil
+    from data_gen import datasets as D
+    shutil.copy(Path(D.DATASETS_DIR) / "d2_end_to_end.jsonl", tmp_path / "d2_end_to_end.jsonl")
+    recs = D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl"))
+    r0 = next(r for r in recs if (r.get("gold_coordinates") or {}).get("origin"))
+    with open(tmp_path / "c.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["d2_id", "role", "name", "lat", "lon", "verified_lat", "verified_lon", "verified_by"])
+        w.writerow([r0["id"], "origin", "x", 0, 0, "12.5", "-70.25", "TC"])
+    out = D.apply_d2_coords(str(tmp_path / "c.csv"), str(tmp_path))
+    assert out["applied"] == 1 and out["not_found"] == []
+    got = next(r for r in D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl")) if r["id"] == r0["id"])
+    assert got["gold_coordinates"]["origin"]["lat"] == 12.5 and got["gold_coordinates"]["origin"]["verified"]
+    hw = next(r for r in recs if r["source"] == "handwritten_todo")
+    (tmp_path / "h.csv").write_bytes(("id,message\n%s,caf\xe9 stop\n" % hw["id"]).encode("cp1252"))
+    assert D.import_d2_handwritten(str(tmp_path / "h.csv"), str(tmp_path)) == 1
+    got = next(r for r in D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl")) if r["id"] == hw["id"])
+    assert got["message"] == "caf\xe9 stop"
+
+
+def test_t_8_39_loops_manifest_and_no_hike_handoff(tmp_path):
+    """Loop destinations copy the origin point; a loop with its origin removed loses the destination;
+    the manifest hash ignores line endings; the hike handoff reason is gone."""
+    import shutil
+    from data_gen import datasets as D
+    for f in ("d2_end_to_end.jsonl", "d3_adversarial.jsonl"):
+        shutil.copy(Path(D.DATASETS_DIR) / f, tmp_path / f)
+    D.fix_d2_loops(str(tmp_path))
+    recs = D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl"))
+    for r in recs:
+        cs, co = r["gold_constraint_set"], r["gold_coordinates"] or {}
+        if cs and cs["loop"] and cs["origin"]:
+            assert co["destination"]["lat"] == co["origin"]["lat"]
+        if cs and cs["loop"] and cs["missing_field"] == "origin":
+            assert cs["destination"] is None and "destination" not in co
+    assert D.fix_d2_loops(str(tmp_path)) == {"loop_destination_copied": [], "loop_destination_cleared": []}
+    crlf = tmp_path / "x.jsonl"
+    crlf.write_bytes(b'{"a": 1}\r\n')
+    lf = tmp_path / "y.jsonl"
+    lf.write_bytes(b'{"a": 1}\n')
+    assert D.lf_sha256(crlf) == D.lf_sha256(lf)
+    assert all(h != "unfamiliar_terrain_hike" for h, _ in D.HANDOFF_PLAN)
+
+
+def test_t_8_40_gold_constraints_follow_extractor_semantics(tmp_path):
+    """Evaluator view: loop destination null, named stop category null, generic stop query == category == type word,
+    charging stop is ev_charging_station; refresh is idempotent."""
+    import shutil
+    from data_gen import datasets as D
+    shutil.copy(Path(D.DATASETS_DIR) / "d2_end_to_end.jsonl", tmp_path / "d2_end_to_end.jsonl")
+    D.refresh_gold_constraints(str(tmp_path))
+    assert D.refresh_gold_constraints(str(tmp_path))["gold_constraints_updated"] == 0
+    for r in D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl")):
+        g = r["gold_constraints"]
+        if not g:
+            continue
+        assert not (g["loop"] and g["destination"])
+        for s in g["stops"]:
+            assert s["category"] in (None, *D.STOP_TYPE_WORD.values())
+            assert s["category"] is None or s["query"] == s["category"]
+            assert s["category"] != "fuel_or_charging"
+
+
+def test_t_8_41_more_than_three_required_stops_is_handoff(tmp_path):
+    """The planner limit is 3 required stops: more is a too_many_stops handoff, and the flag matches the rule."""
+    import shutil
+    from data_gen import datasets as D
+    shutil.copy(Path(D.DATASETS_DIR) / "d2_end_to_end.jsonl", tmp_path / "d2_end_to_end.jsonl")
+    D.fix_d2_stop_limit(str(tmp_path))
+    assert D.fix_d2_stop_limit(str(tmp_path))["relabelled_to_handoff"] == []
+    for r in D.read_jsonl(str(tmp_path / "d2_end_to_end.jsonl")):
+        cs = r["gold_constraint_set"]
+        if cs:
+            n = sum(1 for s in cs["stops"] if s.get("required", True))
+            assert (n > 3) == bool(cs["too_many_stops"])
+            assert (n > 3) <= (r["expected_outcome"] == "handoff")

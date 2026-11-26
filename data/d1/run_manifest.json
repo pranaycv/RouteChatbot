@@ -154,6 +154,14 @@
     "qwen/qwen-2.5-72b-instruct"
   ],
   "relabel_prompt_version": "relabel_v3",
+  "rule_relabel": {
+    "by_split": {
+      "train": 34,
+      "val": 3
+    },
+    "n_changed": 37,
+    "rule": "compare_modes -> plan when fewer than 2 modes are named and no comparison/threshold cue"
+  },
   "seed": 42,
   "split": {
     "handwritten_in_test": 150,

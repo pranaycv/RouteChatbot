@@ -38,15 +38,16 @@ import orjson
 
 from routechat.guards.input_guard import _mask_personal_data
 
-# P-06 proposes deletion after 30 days. This is that decision, not a tuning knob.
+# P-06 sets deletion after 30 days, for log lines and support tickets. This is that decision, not a tuning knob.
 RETENTION_DAYS = 30
+# Several visitors share one process. A ticket added while the queue is pruned must not be lost.
+_queue_lock = threading.Lock()
 
 _ROOT = Path(__file__).resolve().parents[1]
-_ADDRESS_RE = re.compile(
-    r"\b\d{1,6}\s+(?:[A-Za-z][A-Za-z.'-]*\s+){0,3}"
-    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct)\b\.?",
-    re.IGNORECASE,
-)
+_STREET = r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct)"
+_ADDRESS_RE = re.compile(rf"\b\d{{1,6}}\s+(?:[A-Za-z][A-Za-z.'-]*\s+){{0,3}}{_STREET}\b\.?", re.IGNORECASE)
+# A check id is the stop with underscores, such as stop:120_adelaide_street.
+_ADDRESS_ID_RE = re.compile(rf"(?<![A-Za-z0-9_])\d{{1,6}}_(?:[a-z]+_){{0,3}}{_STREET}(?![A-Za-z0-9])", re.IGNORECASE)
 # Four or more decimals is precise enough to point at a building. Three is about 100 m.
 _COORD_RE = re.compile(r"-?\d{1,3}\.\d{4,}")
 
@@ -64,7 +65,7 @@ def handoff_path() -> Path:
 def mask_for_log(text: str) -> str:
     """Mask personal data, street addresses, and precise coordinates."""
     masked, _types = _mask_personal_data(text)
-    masked = _ADDRESS_RE.sub("[ADDRESS]", masked)
+    masked = _ADDRESS_ID_RE.sub("[ADDRESS]", _ADDRESS_RE.sub("[ADDRESS]", masked))
 
     def _round_coord(match: re.Match[str]) -> str:
         return f"{float(match.group(0)):.3f}"
@@ -72,14 +73,20 @@ def mask_for_log(text: str) -> str:
     return _COORD_RE.sub(_round_coord, masked)
 
 
+def _mask_value(value: Any) -> Any:
+    """Mask every text inside a record. A ticket holds the trip, and its origin can be a street address."""
+    if isinstance(value, str):
+        return mask_for_log(value)
+    if isinstance(value, dict):
+        return {key: _mask_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_mask_value(item) for item in value]
+    return value
+
+
 def _clean_record(record: dict[str, Any]) -> dict[str, Any]:
-    clean: dict[str, Any] = {}
-    for key, value in record.items():
-        if isinstance(value, str) and key != "ts":
-            # The timestamp's fractional seconds would look like a coordinate to the mask.
-            clean[key] = mask_for_log(value)
-        else:
-            clean[key] = value
+    # The timestamp's fractional seconds would look like a coordinate to the mask.
+    clean = {key: value if key == "ts" else _mask_value(value) for key, value in record.items()}
     clean.setdefault("ts", datetime.now(timezone.utc).isoformat())
     run_id = os.environ.get("RUN_ID")
     if run_id:
@@ -105,9 +112,8 @@ def prune_expired(path: Path | None = None, *, now: datetime | None = None) -> N
         return
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=RETENTION_DAYS)
     kept: list[bytes] = []
-    for raw in target.read_bytes().splitlines():
-        if not raw.strip():
-            continue
+    lines = [raw for raw in target.read_bytes().splitlines() if raw.strip()]
+    for raw in lines:
         try:
             record = orjson.loads(raw)
             stamp = datetime.fromisoformat(record["ts"])
@@ -118,25 +124,32 @@ def prune_expired(path: Path | None = None, *, now: datetime | None = None) -> N
             stamp = stamp.replace(tzinfo=timezone.utc)
         if stamp >= cutoff:
             kept.append(raw)
+    if len(kept) == len(lines):
+        return
     body = b"\n".join(kept)
     target.write_bytes(body + (b"\n" if body else b""))
 
 
 def append_handoff(ticket: dict[str, Any]) -> None:
-    """Add one support ticket. The request text is masked before it is stored."""
+    """Add one support ticket, masked, and drop the ones past the retention period."""
     path = handoff_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = orjson.dumps(_clean_record(ticket)).decode("utf-8")
-    with path.open("ab") as handle:
-        handle.write(line.encode("utf-8") + b"\n")
+    line = orjson.dumps(_clean_record(ticket))
+    with _queue_lock:
+        with path.open("ab") as handle:
+            handle.write(line + b"\n")
+        prune_expired(path)
 
 
 def read_handoffs() -> list[dict[str, Any]]:
     path = handoff_path()
     if not path.exists():
         return []
+    with _queue_lock:
+        prune_expired(path)
+        body = path.read_bytes()
     tickets: list[dict[str, Any]] = []
-    for raw in path.read_bytes().splitlines():
+    for raw in body.splitlines():
         if raw.strip():
             tickets.append(orjson.loads(raw))
     return tickets
@@ -277,13 +290,17 @@ def request_outcome(state: dict[str, Any]) -> str:
     if action == "escalate":
         return "handoff"
     if action == "clarify":
-        return "handoff" if state.get("clarify_count", 0) >= 1 else "clarify"
+        return "handoff" if "asked" not in state and state.get("clarify_count", 0) >= 1 else "clarify"
+    if not action and (_plain(state.get("rewrite")) or {}).get("status") == "unclear":
+        return "clarify"
     constraints = _plain(state.get("constraints")) or {}
     if constraints.get("missing_field") or constraints.get("too_many_stops"):
         return "clarify"
     report = _plain(state.get("report")) or {}
     if report.get("decision") == "handoff" or state.get("handoff"):
         return "handoff"
+    if report.get("decision") in ("clarify", "refuse"):
+        return report["decision"]
     return "accept"
 
 
@@ -291,14 +308,17 @@ def _stopped_at(state: dict[str, Any]) -> str:
     guard = _plain(state.get("guard")) or {}
     if guard.get("decision") not in (None, "allow"):
         return "guard_in"
+    if (_plain(state.get("rewrite")) or {}).get("status") == "unclear":
+        return "rewrite"
+    # Read before the action: a verifier question asked twice is relabelled escalate by the graph.
+    if (_plain(state.get("report")) or {}).get("decision") in ("handoff", "clarify", "refuse"):
+        return "verify"
     action = (_plain(state.get("classification")) or {}).get("route_action")
     if action in ("refuse", "escalate", "clarify"):
         return "classify"
     constraints = _plain(state.get("constraints")) or {}
     if constraints.get("missing_field") or constraints.get("too_many_stops"):
         return "extract"
-    if (_plain(state.get("report")) or {}).get("decision") == "handoff":
-        return "verify"
     return ""
 
 

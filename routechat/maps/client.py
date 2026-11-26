@@ -9,6 +9,7 @@ import httpx
 import orjson
 
 from routechat.config import ROOT, get_settings
+from routechat.keys import get_key
 
 
 class MapError(Exception):
@@ -42,7 +43,7 @@ class MapClient:
                 ("GRAPHHOPPER_KEY", "key") if api == "graphhopper"
                 else ("MAPBOX_TOKEN", "access_token")
             )
-            token = os.environ.get(token_name)
+            token = get_key(token_name)
             if not token:
                 raise MapError("provider_not_configured")
             payload = self._fetch(api, method, url, {**params, token_param: token}, body)

@@ -50,6 +50,15 @@ def test_prepare_accepts_flat_records_and_cli(tmp_path):
     assert prepare.convert(flat, tmp_path / "two.jsonl", limit=2) == 2
 
 
+@pytest.mark.parametrize(("split", "records"), [("train", 1407), ("val", 199)])
+def test_prepare_reads_the_committed_d1_files(tmp_path, split, records):
+    """D1 rows hold "turn" as a number, so they are read by their flat fields."""
+    out = tmp_path / f"{split}.jsonl"
+    assert prepare.convert(ROOT / "data" / "d1" / f"{split}.jsonl", out) == records
+    turn = json.loads(json.loads(out.read_text(encoding="utf-8").splitlines()[0])["prompt"][-1]["content"])
+    assert set(turn) == {"utterance", "turn_index", "known"}
+
+
 def test_train_dry_run_reads_config_and_overrides(tmp_path):
     val = tmp_path / "val.jsonl"
     prepare.convert(FEWSHOT, val)

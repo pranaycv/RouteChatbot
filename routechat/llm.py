@@ -15,7 +15,9 @@ What it does
   attempts started within 3 s of the first, 1 s to 3 s apart, 15 s per call, worst case 21.5 s.
   Profile "eval" (automatic under FIXTURES=record|refresh, or LLM_RETRY_PROFILE=eval) keeps six
   attempts 2 s to 60 s apart so a recorded run over hundreds of records survives a one-minute
-  rate limit. LLM_TIMEOUT_S overrides the per-call timeout. The SDK's own retries are off.
+  rate limit. LLM_TIMEOUT_S overrides the per-call timeout. The SDK's own retries are off. A caller's
+  `options` (extra ChatOpenAI arguments, used by the refiner) are applied last, so an explicit timeout or
+  max_retries there wins over the profile; they are not part of the fixture key.
 - Prices from config.yaml give cost_usd per call.
 - log_stage writes one JSON line per stage call in the WP10 stage-line format (eval/log_schema.py).
 
@@ -38,6 +40,7 @@ from typing import Any
 from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_after_delay, wait_exponential_jitter
 
 from routechat.config import ROOT, get_settings
+from routechat.keys import get_key
 
 FIXTURE_DIR = ROOT / "routechat" / "fixtures" / "llm"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -105,10 +108,10 @@ def cost_usd(model: str, tokens_in: int, tokens_out: int) -> float:
 
 
 def provider_and_client_kwargs() -> tuple[str, dict[str, Any]]:
-    openai_key = os.environ.get("OPENAI_API_KEY")
+    openai_key = get_key("OPENAI_API_KEY")
     if openai_key:
         return "openai", {"api_key": openai_key}
-    router_key = os.environ.get("OPENROUTER_API_KEY")
+    router_key = get_key("OPENROUTER_API_KEY")
     if router_key:
         return "openrouter", {"api_key": router_key, "base_url": OPENROUTER_BASE_URL}
     raise LLMNoKey("set OPENAI_API_KEY or OPENROUTER_API_KEY in .env, or run with FIXTURES=replay")
@@ -179,11 +182,12 @@ def _live_call(
     max_tokens: int | None,
     schema: type | None,
     reasoning_effort: str | None = None,
+    options: dict[str, Any] | None = None,
 ) -> tuple[str, int, int, str]:
     """One network call, retried on transient errors under the active retry profile (_RETRY_PROFILES)."""
     profile = retry_profile()
     timeout_s = float(retry_policy(profile)["timeout_s"])
-    return _retrying(profile)(_live_call_once, messages, model, temperature, max_tokens, schema, reasoning_effort, timeout_s)
+    return _retrying(profile)(_live_call_once, messages, model, temperature, max_tokens, schema, reasoning_effort, timeout_s, options)
 
 
 def _live_call_once(
@@ -194,21 +198,25 @@ def _live_call_once(
     schema: type | None,
     reasoning_effort: str | None,
     timeout_s: float,
+    options: dict[str, Any] | None = None,
 ) -> tuple[str, int, int, str]:
     """One network call through langchain-openai with one timeout and no retries of its own.
 
     Returns (text, tokens_in, tokens_out, provider). A reasoning model takes reasoning_effort
-    (low, medium, high) and no temperature, which those models reject.
+    (low, medium, high) and no temperature, which those models reject. options are extra ChatOpenAI
+    arguments from the caller; they are applied after the profile's timeout and max_retries, so each
+    name is passed once and the caller's value wins.
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
     provider, kwargs = provider_and_client_kwargs()
     model_name = f"openai/{model}" if provider == "openrouter" and "/" not in model else model
+    client = {"timeout": timeout_s, "max_retries": 0, **kwargs, **(options or {})}
     if reasoning_effort:
-        llm = ChatOpenAI(model=model_name, reasoning_effort=reasoning_effort, max_tokens=max_tokens, timeout=timeout_s, max_retries=0, **kwargs)
+        llm = ChatOpenAI(model=model_name, reasoning_effort=reasoning_effort, max_tokens=max_tokens, **client)
     else:
-        llm = ChatOpenAI(model=model_name, temperature=temperature, max_tokens=max_tokens, timeout=timeout_s, max_retries=0, **kwargs)
+        llm = ChatOpenAI(model=model_name, temperature=temperature, max_tokens=max_tokens, **client)
     roles = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
     lc_messages = [roles[m["role"]](content=m["content"]) for m in messages]
     if schema is not None:
@@ -230,8 +238,13 @@ def complete(
     max_tokens: int | None = None,
     schema: type | None = None,
     reasoning_effort: str | None = None,
+    options: dict[str, Any] | None = None,
 ) -> LLMResult:
-    """Send one chat completion, honouring FIXTURES=record|replay|refresh."""
+    """Send one chat completion, honouring FIXTURES=record|replay|refresh.
+
+    options are extra ChatOpenAI arguments, such as a timeout. They are not part of the fixture key and
+    they override the retry profile's timeout and max_retries for this call.
+    """
     mode = os.environ.get("FIXTURES", "").strip().lower()
     schema_name = getattr(schema, "__name__", None) if schema is not None else None
     key = fixture_key(model, temperature, messages, schema_name, reasoning_effort)
@@ -251,7 +264,7 @@ def complete(
         return LLMResult(rec["text"], tokens_in, tokens_out, model, "replay", float(rec.get("latency_ms", 0.0)), cost_usd(model, tokens_in, tokens_out))
 
     started = time.perf_counter()
-    text, tokens_in, tokens_out, provider = _live_call(messages, model, temperature, max_tokens, schema, reasoning_effort)
+    text, tokens_in, tokens_out, provider = _live_call(messages, model, temperature, max_tokens, schema, reasoning_effort, options)
     latency_ms = round((time.perf_counter() - started) * 1000, 3)
     if mode in ("record", "refresh"):
         write_fixture(

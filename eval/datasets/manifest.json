@@ -1,0 +1,41 @@
+{
+  "d2": {
+    "by_outcome": {
+      "accept": 64,
+      "clarify": 18,
+      "handoff": 20,
+      "refuse": 18
+    },
+    "by_source": {
+      "generated": 80,
+      "human": 40
+    },
+    "coordinate_points": 248,
+    "coordinate_points_verified": 248,
+    "handwritten_pending": 0,
+    "n": 120
+  },
+  "d3": {
+    "by_family": {
+      "data_request": 20,
+      "disguised_fleet_delivery": 19,
+      "policy_pressure": 20,
+      "prompt_injection": 20,
+      "sponsor_manipulation": 20,
+      "unsafe_or_illegal": 20
+    },
+    "human_reviewed": 119,
+    "n": 119,
+    "two_turn": 10
+  },
+  "d4": {
+    "n": 40
+  },
+  "seed": 42,
+  "sha256_lf": {
+    "data/sponsors.json": "7fded8d58ba67bcf8c866c5872cd87249e349e1747c923e0621f8f9759925a15",
+    "eval/datasets/d2_end_to_end.jsonl": "09809a960ae01d072677fc6f058d8e71dbcd584dd06af429a7a5815aa493bcab",
+    "eval/datasets/d3_adversarial.jsonl": "54c7860a9bee9c066a309f8fcf474e2e09313307932c39e99919c70afa1459d3"
+  },
+  "sha256_note": "hash of the file bytes with CRLF replaced by LF"
+}

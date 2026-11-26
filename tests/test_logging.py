@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -18,8 +18,9 @@ from routechat.agents.writer import write_node
 from routechat.graph import invoke
 from routechat.guards.input_guard import input_guard
 from routechat.guards.output_guard import output_guard
-from routechat.logging import stage_line, token_cost
-from routechat.stubs import RUNNING_UTTERANCE, running_draft, stub_nodes
+from routechat.logging import RETENTION_DAYS, append_handoff, mask_for_log, read_handoffs, stage_line, token_cost
+from routechat.schemas import HandoffTicket
+from routechat.stubs import RUNNING_UTTERANCE, running_constraints, running_draft, stub_nodes
 
 PAYLOAD = {
     "request_id": "r_0193",
@@ -88,7 +89,7 @@ def test_the_writer_line_carries_model_prompt_tokens_and_cost(monkeypatch):
     write = next(line for line in lines if line["stage"] == "write")
     expected = token_cost("gpt-4.1-mini", 1200, 80)
     assert write["model"] == "gpt-4.1-mini"
-    assert write["prompt_version"] == "writer_v2"
+    assert write["prompt_version"] == "writer_v3"
     assert (write["tokens_in"], write["tokens_out"]) == (1200, 80)
     assert write["cost_usd"] == pytest.approx(expected)
     assert lines[-1]["cost_usd_total"] == pytest.approx(expected)
@@ -134,3 +135,74 @@ def test_a_stage_line_from_another_package_reaches_the_file(monkeypatch):
     assert line["stage"] == "classify"
     assert line["model"] == "ft"
     assert validate_line(line) == []
+
+
+@pytest.fixture
+def queue(tmp_path, monkeypatch):
+    path = tmp_path / "queue.jsonl"
+    monkeypatch.setenv("ROUTECHAT_HANDOFF_QUEUE", str(path))
+    return path
+
+
+def _ticket_line(name: str, age_days: float | None) -> str:
+    ticket = {"request_id": name, "reason": "needs_a_person", "redacted_request": name}
+    if age_days is not None:
+        ticket["ts"] = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
+    return json.dumps(ticket) + "\n"
+
+
+def test_an_old_ticket_is_dropped_when_a_new_one_is_added(queue):
+    queue.write_text(_ticket_line("old", RETENTION_DAYS + 1) + _ticket_line("recent", RETENTION_DAYS - 1))
+    append_handoff({"request_id": "new", "reason": "needs_a_person", "redacted_request": "new"})
+    assert [ticket["request_id"] for ticket in read_handoffs()] == ["recent", "new"]
+    assert '"old"' not in queue.read_text()
+
+
+def test_an_old_ticket_is_dropped_when_the_queue_is_read(queue):
+    queue.write_text(_ticket_line("old", RETENTION_DAYS + 1) + _ticket_line("recent", 1))
+    assert [ticket["request_id"] for ticket in read_handoffs()] == ["recent"]
+    assert '"old"' not in queue.read_text()
+
+
+def test_reading_a_queue_with_nothing_old_leaves_the_file_alone(queue):
+    queue.write_text(_ticket_line("recent", 1) + _ticket_line("undated", None))
+    before = queue.stat().st_mtime_ns
+    assert [ticket["request_id"] for ticket in read_handoffs()] == ["recent", "undated"]
+    assert queue.stat().st_mtime_ns == before
+
+
+def test_a_ticket_masks_the_trip_details_too(queue):
+    constraints = running_constraints().model_copy(
+        update={"origin": "120 Adelaide Street", "ambiguities": ["call me at 416-555-0199"]}
+    )
+    ticket = HandoffTicket(
+        ticket_id="t1", reason="requirements_not_met", redacted_request="From 120 Adelaide Street",
+        constraints=constraints, report=None, created_at=datetime.now(timezone.utc),
+    )
+    append_handoff(ticket.model_dump())
+    saved = queue.read_text()
+    assert "Adelaide" not in saved and "416-555-0199" not in saved
+    assert "Canadian Tire" in saved and '"created_at"' in saved
+
+
+@pytest.mark.parametrize(
+    ("check_id", "saved"),
+    [
+        ("stop:120_adelaide_street", "stop:[ADDRESS]"),
+        ("hours:1_king_st", "hours:[ADDRESS]"),
+        ("stop:25_st_clair_avenue_west", "stop:[ADDRESS]_west"),
+        ("stop:markham_rd_at_finch_ave_east", "stop:markham_rd_at_finch_ave_east"),
+        ("stop:tim_hortons", "stop:tim_hortons"),
+        ("stop:7_eleven", "stop:7_eleven"),
+        ("stop:24_hour_coffee_stand", "stop:24_hour_coffee_stand"),
+        ("avoid:highways", "avoid:highways"),
+    ],
+)
+def test_a_street_address_in_a_check_id_is_masked(queue, check_id, saved):
+    """A check id is made from the stop the user asked for."""
+    report = {"checks": [{"id": check_id, "status": "met", "hard": True}], "must_mention": [check_id]}
+    append_handoff({"request_id": "r1", "reason": "x", "redacted_request": "x", "report": report})
+    ticket = read_handoffs()[0]["report"]
+    assert ticket["checks"][0]["id"] == saved
+    assert ticket["must_mention"] == [saved]
+    assert mask_for_log(check_id) == saved

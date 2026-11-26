@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 36 36" role="img" aria-label="RouteChat">
+  <defs>
+    <linearGradient id="g" x1="0.33" y1="0.03" x2="0.67" y2="0.97">
+      <stop offset="0" stop-color="#74b4ea"/>
+      <stop offset="1" stop-color="#2f78c4"/>
+    </linearGradient>
+  </defs>
+  <rect width="36" height="36" rx="11" fill="url(#g)"/>
+  <g transform="translate(9 9)" fill="none">
+    <circle cx="4.2" cy="13.2" r="1.7" fill="#fff"/>
+    <circle cx="13.6" cy="4.8" r="1.7" fill="#fff"/>
+    <path d="M5.6 11.8 L12.2 6.2" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+  </g>
+</svg>

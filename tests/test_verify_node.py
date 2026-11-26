@@ -125,12 +125,12 @@ def test_required_stop_order_and_unverifiable_hours():
         ResolvedPlace(role="stop", query="Coffee", name="Park Cafe", lon=0, lat=0, source="test"),
     ]
     route = state["candidates"][0]
-    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Park Cafe", "Museum"]})]
+    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Origin", "Park Cafe", "Museum", "Destination"]})]
     report = verify_node(state)["report"]
     assert report.decision == "accept"
     assert report.must_mention == ["hours:coffee", "hours:museum"]
 
-    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Museum", "Park Cafe"]})]
+    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Origin", "Museum", "Park Cafe", "Destination"]})]
     report = verify_node(state)["report"]
     assert report.decision == "handoff"
     assert "stop:museum" in report.must_mention
@@ -243,6 +243,27 @@ def test_graphhopper_standard_does_not_retry_identical_request():
 
 
 @pytest.mark.parametrize(
+    ("mode", "decision"),
+    [("unspecified", "clarify"), ("hike", "refuse"), ("multimodal", "refuse")],
+)
+def test_unsupported_mode_gets_direct_reply_without_ticket(mode, decision):
+    from routechat.agents.templates import mode_not_supported_text
+    from routechat.agents.writer import template_message
+    from routechat.logging import request_outcome
+
+    state = _state(mode=mode)
+    state["candidates"] = [RouteCandidate(
+        id="unsupported", provider="graphhopper", mode=mode, error="mode_not_supported",
+    )]
+    state.update(verify_node(state))
+
+    assert state["handoff"] is None
+    assert state["report"].decision == decision
+    assert template_message(state) == mode_not_supported_text(mode)
+    assert request_outcome(state) == decision
+
+
+@pytest.mark.parametrize(
     ("constraints", "decision"),
     [
         ({}, "accept"),
@@ -259,3 +280,80 @@ def test_verify_node_logs_one_stage_line(monkeypatch, constraints, decision):
     (stage, request_id, logged_decision, duration_ms), = calls
     assert (stage, request_id, logged_decision) == ("verify", "request-1", decision)
     assert duration_ms >= 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "reason", "decision"),
+    [
+        ("transit", "transit_not_supported", "refuse"),
+        ("walk", "place_not_found", "clarify"),
+    ],
+)
+def test_map_error_gets_direct_reply_without_ticket(mode, reason, decision):
+    from routechat.agents.templates import TRANSIT_NOT_SUPPORTED, place_not_found_text
+    from routechat.agents.writer import template_message
+    from routechat.logging import request_outcome
+
+    state = _state(mode=mode, origin="Unknown place")
+    state["candidates"] = [RouteCandidate(
+        id="unavailable", provider="graphhopper", mode=mode, error=reason,
+    )]
+    state.update(verify_node(state))
+    expected = TRANSIT_NOT_SUPPORTED if mode == "transit" else place_not_found_text("Unknown place")
+
+    assert state["handoff"] is None
+    assert state["report"].decision == decision
+    assert template_message(state) == expected
+    assert request_outcome(state) == decision
+
+
+@pytest.mark.parametrize(
+    ("order", "on_route", "status"),
+    [
+        (None, ["Tim Hortons, Barrie", "Tim Hortons, Vaughan"], "met"),
+        (None, ["Tim Hortons, Barrie"], "unmet"),
+        ((1, 2), ["Tim Hortons, Barrie", "Tim Hortons, Vaughan"], "met"),
+        ((1, 2), ["Tim Hortons, Barrie"], "unmet"),
+    ],
+)
+def test_a_stop_wanted_twice_must_be_on_the_route_twice(order, on_route, status):
+    orders = order or (None, None)
+    state = _state(stops=[Stop(query="Tim Hortons", category=None, required=True, order=n) for n in orders])
+    state["places"] = [
+        ResolvedPlace(role="stop", query="Tim Hortons", name=name, lon=0, lat=0, source="test") for name in on_route
+    ]
+    route = state["candidates"][0]
+    state["candidates"] = [route.model_copy(update={"stops_in_order": ["Origin", *on_route, "Destination"]})]
+    checks = {check.id: check.status for check in verify_node(state)["report"].checks}
+    assert checks["stop:tim_hortons"] == status
+    assert list(checks).count("hours:tim_hortons") == 1
+
+
+@pytest.mark.parametrize(
+    ("origin", "destination"),
+    [("Tim Hortons", "Destination"), ("Origin", "Tim Hortons")],
+)
+def test_route_endpoints_do_not_count_as_required_stops(origin, destination):
+    state = _state(origin=origin, destination=destination, stops=[
+        Stop(query="Tim Hortons", category=None, required=True, order=None),
+        Stop(query="Tim Hortons", category=None, required=True, order=None),
+    ])
+    branch = "Tim Hortons, Toronto"
+    state["places"] = [
+        ResolvedPlace(role=role, query=query, name=name, lon=0, lat=0, source="test")
+        for role, query, name in (
+            ("origin", origin, origin),
+            ("stop", "Tim Hortons", branch),
+            ("destination", destination, destination),
+        )
+    ]
+    route = state["candidates"][0]
+    state["candidates"] = [route.model_copy(update={
+        "provider": "graphhopper",
+        "stops_in_order": [origin, branch, destination],
+    })]
+
+    report = verify_node(state)["report"]
+
+    assert report.decision == "handoff"
+    assert next(check.status for check in report.checks if check.id == "stop:tim_hortons") == "unmet"
