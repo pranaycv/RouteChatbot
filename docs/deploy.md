@@ -52,5 +52,6 @@ Set a spending limit on the model key and make one only for this app, so it can 
 
 - The app sleeps after 12 hours without visitors. Open it before a demo and wake it.
 - A push to `main` updates the app. Tests should pass before a merge.
+- After a merge to `main`, reboot the app: on https://share.streamlit.io, click the three dots next to the app, then **Reboot**. The update brings the new files, but the running app keeps the old version of files it has already loaded. A new file that needs something from the new version then fails, and a real request stops at "Checking your message". This happened on 26 November. The sample ride still works, so it does not show the problem.
 - Logs and support tickets are in files on the server and can be lost on a restart. Requests are masked before they are logged. Each visitor sees only the tickets of their own visit.
 - To stop the app, delete it on https://share.streamlit.io.
