@@ -146,7 +146,8 @@ def test_T_11_04_status_quo_is_minutes_saved_dollars_optional():
     assert s["minutes_saved"] == 22 and math.isnan(s["usd_saved"])
     a["status_quo"]["value_of_time_usd_per_hour"] = 30
     assert math.isclose(cost_model.status_quo_saving(25, 3, a)["usd_saved"], 11.0)
-    study = pd.DataFrame({"minutes_spent": [20, 30, 0], "all_requirements_met": ["yes", "no", "yes"]})
+    study = pd.DataFrame({"trip_id": ["d2_001", "d2_002", "d2_003", "own-trip"], "minutes_spent": [20, 30, 0, 17.5],
+                          "all_requirements_met": ["yes", "no", "yes", ""]})   # own-trip is context, not counted
     summary = cost_model.status_quo_from_study(study)   # the template row (0 minutes) is skipped
     assert summary == {"trips": 2, "median_minutes_manual": 25.0, "all_requirements_met_rate": 0.5}
 
@@ -309,3 +310,47 @@ def test_T_10_19_logs_and_datasets_read_as_utf8(tmp_path):
     p = tmp_path / "d.jsonl"
     p.write_bytes('{"item_id": "hw_1", "utterance": "Walk to Gare Centrale, Montréal"}\n'.encode("utf-8"))
     assert read_jsonl(p)[0]["utterance"].endswith("Montréal")
+
+
+def test_T_10_20_single_agent_baseline_offline(monkeypatch):
+    # The baseline loop with a scripted model and a fake map client: search twice, route, answer.
+    from types import SimpleNamespace
+    from eval import baseline_single_agent as b
+    path = {"points": {"type": "LineString", "coordinates": [[-79.40, 43.65, 80], [-79.39, 43.66, 82]]},
+            "distance": 1500.0, "time": 360000, "ascend": 4.0,
+            "details": {"road_class": [[0, 1, "RESIDENTIAL"]], "toll": [[0, 1, "NO"]],
+                        "road_environment": [[0, 1, "ROAD"]], "bike_network": [[0, 1, "LOCAL"]]}}
+    def fake_request(self, api, method, url, params, body=None):
+        if api == "graphhopper":
+            return {"paths": [path]}
+        q = params.get("q", "")
+        return {"features": [{"properties": {"name": q, "coordinates": {}},
+                              "geometry": {"coordinates": [-79.40, 43.65] if "King" in q else [-79.39, 43.66]}}]}
+    monkeypatch.setattr(b.MapClient, "request", fake_request)
+    script = iter([
+        '{"action": "search", "query": "King Station"}',
+        '{"action": "search", "query": "University of Toronto"}',
+        '{"action": "route", "place_ids": ["p1", "p2"], "mode": "bike", "avoid_highways": true}',
+        '{"action": "answer", "outcome": "accept", "reply": "1.5 km by bike.", "route_id": "r1"}'])
+    monkeypatch.setattr(b, "complete", lambda *a, **k: SimpleNamespace(text=next(script), tokens_in=10, tokens_out=5, cost_usd=0.001))
+    monkeypatch.setattr(b, "log_stage", lambda *a, **k: {})
+    out = b.run_agent("Bike from King Station to U of T, no highways", "t1")
+    assert out["outcome"] == "accept" and out["steps"] == 4 and out["route"] is not None
+    gold = {"origin": "King Station", "destination": "University of Toronto", "stops": [], "mode": "bike",
+            "modes_to_compare": [], "compare_threshold_min": None, "avoid": ["highways"], "prefer": [],
+            "minimize_elevation": False, "check_closures": False, "max_duration_min": 30, "max_distance_km": None,
+            "loop": False, "target_distance_km": None, "depart_at": None, "arrive_by": None,
+            "required_accessibility": False, "ambiguities": [], "missing_field": None, "too_many_stops": False}
+    assert b.hard_requirements_met(gold, *out["route"])                    # 0 m highway, 6 min under 30
+    assert not b.hard_requirements_met({**gold, "max_duration_min": 2}, *out["route"])
+    assert not b.hard_requirements_met({**gold, "stops": [{"query": "Canadian Tire", "category": None,
+                                                           "required": True, "order": 1}]}, *out["route"])
+    # A kind of stop (most of D2's required stops) is met by a stop the agent searched for as that kind.
+    route, places = out["route"]
+    cafe = places[0].model_copy(update={"role": "stop", "query": "coffee shop near King", "name": "Balzac's"})
+    lunch = {"query": "lunch", "category": "lunch", "required": True, "order": 1}
+    coffee = {"query": "coffee", "category": "coffee", "required": True, "order": 1}
+    with_cafe = [places[0], cafe, places[-1]]
+    assert b.hard_requirements_met({**gold, "stops": [coffee]}, route, with_cafe)
+    assert not b.hard_requirements_met({**gold, "stops": [lunch]}, route, with_cafe)
+    assert not b.hard_requirements_met({**gold, "stops": [coffee]}, route, places)   # no stop on the route

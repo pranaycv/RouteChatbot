@@ -174,7 +174,9 @@ def status_quo_saving(minutes_manual: float, minutes_agent: float, a: dict) -> d
 
 def status_quo_from_study(study: pd.DataFrame) -> dict:
     """Summary of report/status_quo_study.csv: median minutes by hand and how often every requirement was met."""
-    done = study[pd.to_numeric(study["minutes_spent"], errors="coerce") > 0]
+    # Only timed D2 trips; other rows (such as a self-reported trip of our own) are context, not the baseline.
+    timed = study[study["trip_id"].astype(str).str.startswith("d2_")]
+    done = timed[pd.to_numeric(timed["minutes_spent"], errors="coerce") > 0]
     met = done["all_requirements_met"].astype(str).str.lower().eq("yes")
     return {"trips": len(done),
             "median_minutes_manual": float(pd.to_numeric(done["minutes_spent"]).median()) if len(done) else NAN,
