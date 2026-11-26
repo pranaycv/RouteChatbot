@@ -218,6 +218,50 @@ uv run python -m data_gen.pipeline generate --n 3000 --out data/d1_pilot_new
 
 The output then goes through human review, splitting and freezing. [data_gen/README.md](data_gen/README.md) has those steps, and the ones for D2 to D4.
 
+## Fine-tuning
+
+The `ft` classifier is Qwen2.5-1.5B-Instruct with a LoRA adapter trained on D1. Training needs a GPU, so it runs on a free Kaggle T4 through [finetune/kaggle_train.ipynb](finetune/kaggle_train.ipynb). One run of 3 epochs took about 2 GPU-hours (about $0.69). The adapter is not stored in this repository.
+
+The first two steps need no GPU and no key. They run on any laptop.
+
+Turn D1 into training records. The prompts are the same ones the classifier sends at runtime:
+
+```bash
+uv run python finetune/prepare.py --in data/d1/train.jsonl --out finetune/data/train.jsonl
+```
+
+```bash
+uv run python finetune/prepare.py --in data/d1/val.jsonl --out finetune/data/val.jsonl
+```
+
+Check the settings and record counts without training:
+
+```bash
+uv run python finetune/train.py --train finetune/data/train.jsonl --val finetune/data/val.jsonl --out finetune/artifacts/run_r16_lr2e-4 --dry-run
+```
+
+Train on Kaggle. Import the notebook, choose GPU T4 x1 with Internet on, and click Run All. The notebook clones this repository and runs prepare, train and checkpoint selection. [finetune/README.md](finetune/README.md) has the steps, and how to start it from the command line. When it finishes, download `routechatbot_adapter.zip` and unzip it to `finetune/artifacts/adapter/`.
+
+Run the fine-tuned classifier on your machine. This needs the training libraries:
+
+```bash
+uv sync --group finetune
+```
+
+```bash
+CLASSIFIER_BACKEND=ft uv run streamlit run routechat/app.py
+```
+
+Set `CLASSIFIER_ADAPTER_DIR` if the adapter is in another folder. `CLASSIFIER_BACKEND=base` runs the same model without the adapter.
+
+Time the classifier on your laptop (`--device` takes `cpu`, `mps` or `cuda`):
+
+```bash
+uv run --group finetune python scripts/classifier_latency_bench.py --device cpu --out eval/results/latency_bench.json
+```
+
+The training libraries install on Linux, Windows and Apple Silicon Macs. PyTorch has no build for Intel Macs, so `uv sync --group finetune` fails there. On an Intel Mac, use the prompted classifiers or run the `ft` one on Kaggle.
+
 ## Tests and evaluation
 
 <picture>
