@@ -199,6 +199,9 @@ def test_T_10_12_run_log_comes_from_wp7(tmp_path, monkeypatch):
     assert [l["item_id"] for l in req] == ["x1", "x2"] and {l["dataset"] for l in req} == {"D2"}
     assert all(validate_line(l) == [] for l in lines)
     assert len(predicted) == 2 and predicted[0]["judge_input"]["item_id"] == "x1"
+    # resolved points are kept per item for place accuracy, with coordinates and no other fields
+    assert all(isinstance(p["places"], list) for p in predicted)
+    assert all(set(pl) == {"role", "query", "name", "lat", "lon", "source"} for p in predicted for pl in p["places"])
 
 def test_T_11_05_sponsor_rate_measured_from_the_run():
     req = pd.DataFrame([request_line("a", "accept"), request_line("b", "accept"), request_line("c", "refuse"),
