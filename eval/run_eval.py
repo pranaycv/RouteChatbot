@@ -93,7 +93,11 @@ def run_graph(records: list[dict], dataset: str, run_id: str) -> tuple[Path, lis
                         "turn_index": _or(r.get("turn_index"), 0), "known": _or(r.get("known"), None),
                         "clarify_count": _or(r.get("clarify_count"), 0), "revision_count": 0})
         con = _plain(state.get("constraints"))
-        predicted.append({"item_id": r["item_id"], "constraints": con,
+        # WP4's resolved points, for place accuracy (within 200 m of D2's gold coordinates). Like the
+        # ConstraintSet they stay out of the app log and go only to eval/results, which git ignores.
+        places = [{k: _plain(p).get(k) for k in ("role", "query", "name", "lat", "lon", "source")}
+                  for p in (state.get("places") or []) if isinstance(_plain(p), dict)]
+        predicted.append({"item_id": r["item_id"], "constraints": con, "places": places,
                           "judge_input": judge_input(r, state)})
     return log_path, predicted
 
@@ -236,7 +240,10 @@ def step_extractor(run_id: str, gold: pd.DataFrame, predicted: list[dict] | None
     log); gold ones from the D2 file. Both are written to eval/results, which git ignores."""
     if not predicted or "gold_constraints" not in gold:
         print("extractor: needs a fresh D2 run and gold_constraints in D2 (WP8)"); return
-    save(pd.DataFrame(predicted), "predicted_constraints.csv", run_id)
+    save(pd.DataFrame([{k: v for k, v in r.items() if k != "places"} for r in predicted]), "predicted_constraints.csv", run_id)
+    rows = [{"item_id": r["item_id"], **p} for r in predicted for p in (r.get("places") or [])]
+    if rows:
+        save(pd.DataFrame(rows), "resolved_places.csv", run_id)
     # Only requests that have a gold ConstraintSet and reached the extractor: a refused request has neither.
     flat = lambda rows, key: pd.DataFrame([{"item_id": r["item_id"], **r[key]} for r in rows if isinstance(r.get(key), dict)])
     pred = flat(predicted, "constraints")

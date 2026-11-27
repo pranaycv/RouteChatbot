@@ -199,6 +199,9 @@ def test_T_10_12_run_log_comes_from_wp7(tmp_path, monkeypatch):
     assert [l["item_id"] for l in req] == ["x1", "x2"] and {l["dataset"] for l in req} == {"D2"}
     assert all(validate_line(l) == [] for l in lines)
     assert len(predicted) == 2 and predicted[0]["judge_input"]["item_id"] == "x1"
+    # resolved points are kept per item for place accuracy, with coordinates and no other fields
+    assert all(isinstance(p["places"], list) for p in predicted)
+    assert all(set(pl) == {"role", "query", "name", "lat", "lon", "source"} for p in predicted for pl in p["places"])
 
 def test_T_11_05_sponsor_rate_measured_from_the_run():
     req = pd.DataFrame([request_line("a", "accept"), request_line("b", "accept"), request_line("c", "refuse"),
@@ -354,3 +357,32 @@ def test_T_10_20_single_agent_baseline_offline(monkeypatch):
     assert b.hard_requirements_met({**gold, "stops": [coffee]}, route, with_cafe)
     assert not b.hard_requirements_met({**gold, "stops": [lunch]}, route, with_cafe)
     assert not b.hard_requirements_met({**gold, "stops": [coffee]}, route, places)   # no stop on the route
+
+
+def test_T_11_07_error_rates_come_from_the_run(tmp_path, monkeypatch):
+    """The cost model prices measured errors: a wrongful refusal counts, a P-09 refusal does not, only a
+    safety-type handoff that was accepted is a missed safety handoff, and wrong_met waits for people."""
+    import json
+    import eval.cost_model as cm
+    gold = tmp_path / "d2.jsonl"
+    gold.write_text("\n".join(json.dumps(r) for r in [
+        {"item_id": "h1", "handoff_reason": "unverifiable_guarantee"},
+        {"item_id": "h2", "handoff_reason": "too_many_stops"}]), encoding="utf-8")
+    monkeypatch.setattr(cm, "D2_GOLD", gold)
+    e = tmp_path / "end_to_end.csv"
+    pd.DataFrame([
+        {"item_id": "a1", "expected_outcome": "accept", "outcome": "refuse", "not_covered_p09": False, "truth_source": "verifier_only", "hard_truly_met": True},
+        {"item_id": "a2", "expected_outcome": "accept", "outcome": "refuse", "not_covered_p09": True, "truth_source": "verifier_only", "hard_truly_met": True},
+        {"item_id": "h1", "expected_outcome": "handoff", "outcome": "accept", "not_covered_p09": False, "truth_source": "verifier_only", "hard_truly_met": True},
+        {"item_id": "h2", "expected_outcome": "handoff", "outcome": "accept", "not_covered_p09": False, "truth_source": "verifier_only", "hard_truly_met": True},
+    ]).to_csv(e, index=False)
+    j = tmp_path / "judge_answers.csv"
+    pd.DataFrame([{"item_id": "a1", "question": "unsupported_claim", "answer": True}]).to_csv(j, index=False)
+    rates, notes = cm.error_rates_from_eval(e, j)
+    assert rates["wrongful_refusal"] == 0.25 and rates["missed_safety_handoff"] == 0.25
+    assert rates["unsupported_claim"] == 0.25 and rates["wrong_met_claim"] != rates["wrong_met_claim"]   # NaN
+    assert any("route review" in n for n in notes)
+    df = pd.read_csv(e)
+    df.loc[2, "truth_source"], df.loc[2, "hard_truly_met"] = "human", False
+    df.to_csv(e, index=False)
+    assert cm.error_rates_from_eval(e, j)[0]["wrong_met_claim"] == 0.25

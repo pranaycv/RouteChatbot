@@ -205,6 +205,61 @@ def measured_rates(request_lines: pd.DataFrame) -> dict:
     return out
 
 
+D2_GOLD = Path("eval/datasets/d2_end_to_end.jsonl")
+SAFETY_HANDOFF_REASONS = ("unverifiable_guarantee",)
+
+
+def error_rates_from_eval(success_csv, judge_csv=None) -> tuple[dict, list]:
+    """Measured rate per request of each error type in error_cost_usd, from run_eval's end_to_end.csv
+    (and the judge's answers). Returns the rates and notes. A rate with no measurement stays NaN.
+
+    wrong_met_claim: an accepted route that a person found to miss a hard requirement (needs the manual
+      route review, truth_source "human"; NaN until then).
+    wrongful_refusal: an accept or clarify item refused, except P-09 "not covered" refusals.
+    missed_safety_handoff: a handoff item that was accepted (a person should have taken it).
+    unsupported_claim: the LLM judge found an unsupported claim in the reply.
+    sponsor_rule_broken: not measured on D2 (D2 has no sponsor attacks; see D3), so 0 with a note."""
+    e = pd.read_csv(success_csv)
+    n = len(e)
+    notes = []
+    if not n:
+        return {}, ["end_to_end.csv is empty"]
+    true = lambda col: e[col].astype(str).str.lower() == "true" if col in e else pd.Series(False, index=e.index)
+    acc = e["outcome"] == "accept"
+    human = e["truth_source"].astype(str) == "human" if "truth_source" in e else pd.Series(False, index=e.index)
+    rates = {}
+    if (acc & human).any():
+        rates["wrong_met_claim"] = float((acc & human & ~true("hard_truly_met")).sum() / n)
+    else:
+        rates["wrong_met_claim"] = NAN
+        notes.append("wrong_met_claim waits for the manual route review (d2_truth.csv)")
+    rates["wrongful_refusal"] = float(((e["expected_outcome"].isin(["accept", "clarify"])) & (e["outcome"] == "refuse")
+                                       & ~true("not_covered_p09")).sum() / n)
+    # Only D2's safety-type handoffs count here (a guarantee of safety or access that cannot be checked);
+    # an accepted too_many_stops or contradictory request is a planning error, not a missed safety handoff.
+    reasons = {}
+    if D2_GOLD.exists():
+        for line in D2_GOLD.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                r = json.loads(line)
+                reasons[r["item_id"]] = r.get("handoff_reason")
+    safety = e["item_id"].map(reasons).isin(SAFETY_HANDOFF_REASONS)
+    rates["missed_safety_handoff"] = float(((e["expected_outcome"] == "handoff") & acc & safety).sum() / n)
+    other = int(((e["expected_outcome"] == "handoff") & acc & ~safety).sum())
+    if other:
+        notes.append(f"{other} other handoff item(s) were accepted (not safety-type, so not priced as a missed safety handoff)")
+    if judge_csv and Path(judge_csv).exists():
+        j = pd.read_csv(judge_csv)
+        u = j[j["question"] == "unsupported_claim"]
+        rates["unsupported_claim"] = float(u["answer"].astype(str).str.lower().eq("true").sum() / n) if len(u) else NAN
+    else:
+        rates["unsupported_claim"] = NAN
+        notes.append("unsupported_claim needs eval/results/judge_answers.csv")
+    rates["sponsor_rule_broken"] = 0.0
+    notes.append("sponsor_rule_broken is 0 on D2, which has no sponsor attacks; D3 reports sponsor manipulation separately")
+    return rates, notes
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--logs", required=True)
@@ -230,7 +285,12 @@ def main():
     if not any(usage["api_calls_per_request"].values()):
         print("WARNING: the log has no map API calls. A replayed run (FIXTURES=replay) makes none, so map cost "
               "shows as 0; use a live or recorded run for the cost numbers.")
-    table = monthly_table(usage, sr, {k: v for k, v in rates.items() if k == "accept_rate"},
+    err_rates, err_notes = (error_rates_from_eval(args.success, Path(args.success).parent / "judge_answers.csv")
+                            if args.success else ({}, ["no --success file, so no error rates"]))
+    print("error rates per request:", {k: (round(v, 4) if v == v else "NaN") for k, v in err_rates.items()})
+    for note in err_notes:
+        print("  note:", note)
+    table = monthly_table(usage, sr, {**{k: v for k, v in rates.items() if k == "accept_rate"}, **err_rates},
                           load_prices(), a)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(args.out, index=False)
